@@ -1,12 +1,6 @@
 #Requires -RunAsAdministrator
 # ============================================================================
 # Windows Server 2025 - Setup, Optimization & Hardening Script (ELITE TERMINAL)
-# + Added: Action1 + PDQ Deploy Agent MSI installer (enterprise-grade: logs, retries, verify, cleanup)
-# + Added: Disable RDP NLA
-# + Added: Set timezone to GMT
-# + Added: Ensure Glances via pip (installs Python + glances deps reliably)
-# + Added: Enable WinRM for Semaphore UI (HTTP/5985) and run EVERY TIME
-# - Removed: devolutions-agent from Chocolatey list
 # FIXED: PowerShell parser errors with "$var:" inside strings (now uses ${var}: )
 # ============================================================================
 
@@ -38,6 +32,7 @@ function Invoke-ScoopInstallSafe {
             Write-Warn "Scoop: $PackageId already installed / file exists — continuing"
             return
         }
+        # FIX: ${PackageId}: avoids "$PackageId:" being parsed as a drive-qualified variable
         Write-Warn "Scoop install failed for ${PackageId}: $msg"
         Write-Warn "Continuing..."
     }
@@ -73,103 +68,6 @@ function Install-PSModuleSafe {
         Write-Ok "Installed PowerShell module (AllUsers): $Name"
     } catch {
         Write-Warn "Failed to install module '$Name': $($_.Exception.Message)"
-    }
-}
-
-# ============================================================================
-# Ensure Glances via pip (more reliable than choco package alone)
-# ============================================================================
-function Ensure-GlancesViaPip {
-    [CmdletBinding()]
-    param(
-        [ValidateRange(1,10)][int]$MaxRetries = 3
-    )
-
-    try {
-        Write-Info "Ensuring Python + pip are available for Glances..."
-
-        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-        if (-not $pythonCmd) {
-            Write-Warn "python.exe not found on PATH yet. Refreshing PATH for this session..."
-            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-            $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-        }
-
-        if (-not $pythonCmd) {
-            Write-Warn "Python still not found. Glances pip install will be skipped (may need new session after Python install)."
-            return
-        }
-
-        Write-Info "Upgrading pip..."
-        & python -m pip install --upgrade pip | Out-Null
-
-        for ($i=1; $i -le $MaxRetries; $i++) {
-            try {
-                Write-Info "Installing/Upgrading Glances via pip (attempt $i/$MaxRetries)..."
-                & python -m pip install --upgrade glances psutil pywin32 | Out-Null
-                Write-Ok "Glances installed/upgraded via pip"
-                break
-            } catch {
-                Write-Warn "pip install glances failed: $($_.Exception.Message)"
-                if ($i -eq $MaxRetries) { throw }
-                Start-Sleep -Seconds 3
-            }
-        }
-
-        $gl = Get-Command glances -ErrorAction SilentlyContinue
-        if ($gl) {
-            Write-Ok "glances is available: $($gl.Source)"
-        } else {
-            Write-Warn "glances not on PATH yet. You can run: python -m glances"
-            Write-Warn "If you want 'glances' on PATH immediately, restart the shell after install."
-        }
-    } catch {
-        Write-Warn "Ensure-GlancesViaPip failed: $($_.Exception.Message)"
-    }
-}
-
-# ============================================================================
-# Enable WinRM for Semaphore (HTTP/5985). Runs EVERY TIME script runs.
-# WARNING: Firewall is off in this script; prefer setting TrustedHosts to your controller IP.
-# ============================================================================
-function Enable-WinRMForSemaphore {
-    [CmdletBinding()]
-    param(
-        [string]$TrustedHosts = "*"
-    )
-
-    try {
-        Write-Info "Enabling WinRM for Semaphore (HTTP/5985)..."
-
-        Set-Service -Name WinRM -StartupType Automatic -ErrorAction Stop
-        Start-Service -Name WinRM -ErrorAction Stop
-
-        & winrm quickconfig -q | Out-Null
-
-        $httpListener = & winrm enumerate winrm/config/Listener 2>$null | Out-String
-        if ($httpListener -notmatch "Transport\s*=\s*HTTP") {
-            & winrm create winrm/config/Listener?Address=*+Transport=HTTP '@{Port="5985"}' | Out-Null
-        }
-
-        & winrm set winrm/config/service/auth '@{Basic="true";Kerberos="true";Negotiate="true";Certificate="false";CredSSP="false"}' | Out-Null
-        & winrm set winrm/config/service '@{AllowUnencrypted="true"}' | Out-Null
-        & winrm set winrm/config '@{MaxTimeoutms="1800000"}' | Out-Null
-        & winrm set winrm/config/service '@{MaxConcurrentOperationsPerUser="1500"}' | Out-Null
-
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Client" `
-            -Name "TrustedHosts" -Value $TrustedHosts -Force
-
-        Write-Ok "WinRM enabled. TrustedHosts='$TrustedHosts'"
-
-        try {
-            Test-WSMan -ComputerName localhost -ErrorAction Stop | Out-Null
-            Write-Ok "Test-WSMan localhost OK"
-        } catch {
-            Write-Warn "Test-WSMan check failed: $($_.Exception.Message)"
-        }
-    }
-    catch {
-        Write-Warn "Failed enabling WinRM: $($_.Exception.Message)"
     }
 }
 
@@ -317,234 +215,6 @@ function Update-WindowsTerminalSettings {
     }
 }
 
-# ============================================================================
-# SECTION X: ACTION1 + PDQ DEPLOY AGENT (MSI) - Enterprise installer
-# ============================================================================
-function Install-Agents_Action1_PDQ {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][ValidateNotNullOrEmpty()]
-        [string]$Action1Url,
-
-        [Parameter(Mandatory)][ValidateNotNullOrEmpty()]
-        [string]$PDQUrl,
-
-        [string]$Action1ExpectedDisplayName = "Action1",
-        [string]$PDQExpectedDisplayName     = "PDQ Deploy",
-
-        [string]$Action1ServiceNameContains = "Action1",
-        [string]$PDQServiceNameContains     = "PDQ",
-
-        [string]$BaseDir = "$env:ProgramData\AgentInstall",
-
-        [ValidateRange(1,10)][int]$DownloadRetries = 3,
-        [ValidateRange(1,60)][int]$RetryDelaySeconds = 5,
-
-        [switch]$Cleanup = $true
-    )
-
-    $LogsDir  = Join-Path $BaseDir "Logs"
-    $StageDir = Join-Path $BaseDir "Stage"
-    New-Item -ItemType Directory -Path $LogsDir  -Force | Out-Null
-    New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
-    $LogFile  = Join-Path $LogsDir ("Install-Agents_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
-
-    function Write-AgentLog {
-        param([Parameter(Mandatory)][string]$Message, [ValidateSet("INFO","WARN","ERROR","OK")][string]$Level="INFO")
-        $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        $line = "[${ts}] [$Level] $Message"
-        Write-Host "  $line"
-        Add-Content -Path $LogFile -Value $line
-    }
-
-    function Test-DisplayNameInstalled {
-        param([Parameter(Mandatory)][string]$DisplayNameContains)
-
-        $paths = @(
-            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-        )
-        foreach ($p in $paths) {
-            $hits = Get-ItemProperty -Path $p -ErrorAction SilentlyContinue |
-                Where-Object { $_.DisplayName -and $_.DisplayName -like "*$DisplayNameContains*" }
-            if ($hits) { return $true }
-        }
-        return $false
-    }
-
-    function Test-ServiceExistsContains {
-        param([Parameter(Mandatory)][string]$NameContains)
-        $svc = Get-Service -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -like "*$NameContains*" -or $_.DisplayName -like "*$NameContains*"
-        }
-        return [bool]$svc
-    }
-
-    function Get-FileNameFromUrl {
-        param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$DefaultName)
-        try {
-            $u = [Uri]$Url
-            $name = Split-Path -Leaf $u.AbsolutePath
-            if ([string]::IsNullOrWhiteSpace($name)) { return $DefaultName }
-            if ($name -notmatch '\.msi$') { return $DefaultName }
-            return $name
-        } catch {
-            return $DefaultName
-        }
-    }
-
-    function Download-File {
-        param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$OutFile, [int]$Retries=3, [int]$DelaySeconds=5)
-
-        if (Test-Path -LiteralPath $OutFile) { Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue }
-
-        for ($i=1; $i -le $Retries; $i++) {
-            try {
-                Write-AgentLog "Downloading ($i/$Retries): $Url -> $OutFile"
-                try {
-                    Start-BitsTransfer -Source $Url -Destination $OutFile -TransferType Download -ErrorAction Stop
-                } catch {
-                    Write-AgentLog "BITS failed; falling back to Invoke-WebRequest: $($_.Exception.Message)" "WARN"
-                    Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
-                }
-
-                if (-not (Test-Path -LiteralPath $OutFile)) { throw "Download completed but destination file not found." }
-
-                $len = (Get-Item -LiteralPath $OutFile).Length
-                if ($len -lt 50KB) { throw "Downloaded file is unexpectedly small (${len} bytes)." }
-
-                Write-AgentLog "Download OK (${len} bytes): $OutFile" "OK"
-                return
-            } catch {
-                Write-AgentLog "Download attempt $i failed: $($_.Exception.Message)" "WARN"
-                if ($i -lt $Retries) { Start-Sleep -Seconds $DelaySeconds } else { throw }
-            }
-        }
-    }
-
-    function Install-MSI {
-        param([Parameter(Mandatory)][string]$MsiPath, [string]$ExtraMsiArgs = "")
-        if (-not (Test-Path -LiteralPath $MsiPath)) { throw "MSI not found: $MsiPath" }
-
-        $args = "/i `"$MsiPath`" /qn /norestart $ExtraMsiArgs"
-        Write-AgentLog "Running: msiexec.exe $args"
-        $p = Start-Process -FilePath "msiexec.exe" -ArgumentList $args -Wait -PassThru
-        $code = $p.ExitCode
-
-        if ($code -eq 0) { Write-AgentLog "MSI install succeeded: $MsiPath" "OK"; return 0 }
-        if ($code -eq 3010) { Write-AgentLog "MSI install succeeded (reboot required): $MsiPath" "WARN"; return 3010 }
-        throw "MSI install failed with exit code $code: $MsiPath"
-    }
-
-    $rebootRequired = $false
-
-    Write-AgentLog "=== Agent install started ==="
-    Write-AgentLog "BaseDir: $BaseDir"
-    Write-AgentLog "StageDir: $StageDir"
-    Write-AgentLog "LogFile: $LogFile"
-
-    $Action1MsiName = Get-FileNameFromUrl -Url $Action1Url -DefaultName "Action1Agent.msi"
-    $PDQMsiName     = Get-FileNameFromUrl -Url $PDQUrl     -DefaultName "PDQDeployAgent.msi"
-    $Action1MsiPath = Join-Path $StageDir $Action1MsiName
-    $PDQMsiPath     = Join-Path $StageDir $PDQMsiName
-
-    $action1Installed = Test-DisplayNameInstalled -DisplayNameContains $Action1ExpectedDisplayName
-    if (-not $action1Installed -and $Action1ServiceNameContains) {
-        $action1Installed = Test-ServiceExistsContains -NameContains $Action1ServiceNameContains
-    }
-
-    if ($action1Installed) {
-        Write-AgentLog "Action1 appears already installed. Skipping." "OK"
-    } else {
-        Write-AgentLog "Action1 not detected. Downloading + installing..."
-        Download-File -Url $Action1Url -OutFile $Action1MsiPath -Retries $DownloadRetries -DelaySeconds $RetryDelaySeconds
-        $exit = Install-MSI -MsiPath $Action1MsiPath
-        if ($exit -eq 3010) { $rebootRequired = $true }
-
-        $verified = Test-DisplayNameInstalled -DisplayNameContains $Action1ExpectedDisplayName
-        if (-not $verified -and $Action1ServiceNameContains) {
-            $verified = Test-ServiceExistsContains -NameContains $Action1ServiceNameContains
-        }
-
-        if ($verified) { Write-AgentLog "Action1 verified installed." "OK" }
-        else { Write-AgentLog "Action1 install ran, but verification failed. Check tenant MSI/link." "WARN" }
-    }
-
-    $pdqInstalled = Test-DisplayNameInstalled -DisplayNameContains $PDQExpectedDisplayName
-    if (-not $pdqInstalled -and $PDQServiceNameContains) {
-        $pdqInstalled = Test-ServiceExistsContains -NameContains $PDQServiceNameContains
-    }
-
-    if ($pdqInstalled) {
-        Write-AgentLog "PDQ Deploy Agent appears already installed. Skipping." "OK"
-    } else {
-        Write-AgentLog "PDQ Deploy Agent not detected. Downloading + installing..."
-        Download-File -Url $PDQUrl -OutFile $PDQMsiPath -Retries $DownloadRetries -DelaySeconds $RetryDelaySeconds
-        $exit = Install-MSI -MsiPath $PDQMsiPath
-        if ($exit -eq 3010) { $rebootRequired = $true }
-
-        $verified = Test-DisplayNameInstalled -DisplayNameContains $PDQExpectedDisplayName
-        if (-not $verified -and $PDQServiceNameContains) {
-            $verified = Test-ServiceExistsContains -NameContains $PDQServiceNameContains
-        }
-
-        if ($verified) { Write-AgentLog "PDQ Deploy Agent verified installed." "OK" }
-        else { Write-AgentLog "PDQ install ran, but verification failed. Check MSI/link." "WARN" }
-    }
-
-    if ($Cleanup) {
-        Write-AgentLog "Cleanup enabled. Removing staged MSI files..."
-        foreach ($f in @($Action1MsiPath, $PDQMsiPath)) {
-            if (Test-Path -LiteralPath $f) {
-                Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
-                Write-AgentLog "Deleted: $f" "OK"
-            }
-        }
-    } else {
-        Write-AgentLog "Cleanup disabled. Staged MSIs kept in: $StageDir" "WARN"
-    }
-
-    Write-AgentLog "=== Agent install completed ===" "OK"
-    return @{ RebootRequired = $rebootRequired; LogFile = $LogFile }
-}
-
-# ============================================================================
-# Disable RDP NLA
-# ============================================================================
-function Disable-RdpNla {
-    try {
-        Write-Info "Disabling RDP Network Level Authentication (NLA)..."
-
-        $tsKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
-        Set-ItemProperty -Path $tsKey -Name "UserAuthentication" -Value 0 -Type DWord -Force
-
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Type DWord -Force
-
-        try { Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue | Out-Null } catch {}
-
-        try { Restart-Service -Name TermService -Force -ErrorAction SilentlyContinue } catch {
-            Write-Warn "Could not restart TermService (may require reboot): $($_.Exception.Message)"
-        }
-
-        Write-Ok "RDP NLA disabled"
-    } catch {
-        Write-Warn "Failed to disable RDP NLA: $($_.Exception.Message)"
-    }
-}
-
-# ============================================================================
-# Set timezone to GMT
-# ============================================================================
-function Set-TimezoneGmt {
-    try {
-        Write-Info "Setting timezone to GMT (Greenwich Mean Time)..."
-        tzutil /s "GMT Standard Time" | Out-Null
-        Write-Ok "Timezone set: GMT Standard Time"
-    } catch {
-        Write-Warn "Failed to set timezone: $($_.Exception.Message)"
-    }
-}
-
 # ----------------------------------------------------------------------------
 # Banner
 # ----------------------------------------------------------------------------
@@ -557,18 +227,6 @@ Write-Bad "WARNING: This script applies significant changes."
 Write-Bad "Windows Firewall will be DISABLED (per your request)."
 Write-Host ""
 Read-Host "Press Enter to continue or Ctrl+C to abort"
-
-# ============================================================================
-# SECTION 0: QUICK SYSTEM CHANGES (Timezone + RDP NLA + WinRM)
-# Runs EVERY TIME script runs.
-# ============================================================================
-Write-Host "`n[0/12] Applying Quick System Changes..." -ForegroundColor Yellow
-Set-TimezoneGmt
-Disable-RdpNla
-
-# WinRM for Semaphore - executes EVERY TIME
-# NOTE: replace "*" with your Semaphore controller IP(s) if possible.
-Enable-WinRMForSemaphore -TrustedHosts "*"
 
 # ============================================================================
 # SECTION 1: PACKAGE MANAGERS
@@ -590,7 +248,7 @@ if (Get-Command scoop -ErrorAction SilentlyContinue) {
 }
 
 try { scoop bucket add extras | Out-Null } catch {}
-try { scoop bucket add nerd-fonts | Out-Null } catch {}
+
 
 # ============================================================================
 # SECTION 2: PACKAGES VIA CHOCOLATEY
@@ -599,9 +257,9 @@ Write-Host "`n[2/12] Installing Chocolatey Packages..." -ForegroundColor Yellow
 
 $chocoPkgs = @(
     "git","notepadplusplus","sysinternals","glances","pwsh","osquery","poshgit","winmtr",
-    "python",
-    "cnspec","cnquery","pdq-agent","cloudbase-init",
-    "terminal-icons.powershell","fzf","zoxide","microsoft-windows-terminal"
+    "devolutions-agent","cnspec","cnquery","cloudbase-init",
+    "terminal-icons.powershell","fzf","zoxide","microsoft-windows-terminal","nerd-fonts-firacode",
+    "nerd-fonts-cascadiacode"
 )
 
 foreach ($p in $chocoPkgs) {
@@ -610,34 +268,10 @@ foreach ($p in $chocoPkgs) {
         choco install $p -y
         Write-Ok "Installed: $p"
     } catch {
+        # FIX: ${p}: avoids "$p:" parser issue
         Write-Warn "Chocolatey install failed for ${p}: $($_.Exception.Message)"
         Write-Warn "Continuing..."
     }
-}
-
-Write-Host "`n  Ensuring Glances works (pip-based install)..." -ForegroundColor Cyan
-Ensure-GlancesViaPip
-
-# ============================================================================
-# SECTION 2.5: ACTION1 + PDQ DEPLOY AGENT (MSI) INSTALL
-# ============================================================================
-Write-Host "`n[2.5/12] Installing Action1 + PDQ Deploy Agent (MSI)..." -ForegroundColor Yellow
-
-# >>>>>>> IMPORTANT <<<<<<<
-# Replace these with your real links:
-# - Action1 MSI is tenant-specific (from your Action1 console).
-# - PDQ Deploy Agent MSI is usually hosted on your PDQ server / share.
-$Action1AgentMsiUrl = "https://REPLACE-ME/YOUR-Action1Agent.msi"
-$PDQDeployAgentMsiUrl = "https://REPLACE-ME/YOUR-PDQDeployAgent.msi"
-
-try {
-    $agentResult = Install-Agents_Action1_PDQ -Action1Url $Action1AgentMsiUrl -PDQUrl $PDQDeployAgentMsiUrl
-    if ($agentResult.RebootRequired) {
-        Write-Warn "Agent install indicates a reboot is required (3010)."
-    }
-    Write-Info "Agent install log: $($agentResult.LogFile)"
-} catch {
-    Write-Warn "Agent install failed (continuing with rest of script): $($_.Exception.Message)"
 }
 
 # ============================================================================
@@ -650,9 +284,7 @@ $scoopPkgs = @(
     "neovim",
     "main/wttop",
     "starship",
-    "nu",
-    "nerd-fonts/FiraCode-NF",
-    "nerd-fonts/CascadiaCode-NF"
+    "nu"
 )
 foreach ($pkg in $scoopPkgs) { Invoke-ScoopInstallSafe -PackageId $pkg }
 
