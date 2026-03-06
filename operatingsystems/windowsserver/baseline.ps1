@@ -144,14 +144,6 @@ if (Get-Module -ListAvailable -Name posh-git) {
     Import-Module posh-git -ErrorAction SilentlyContinue
 }
 
-# ---- ActiveDirectoryStructure + Testimo ----
-if (Get-Module -ListAvailable -Name ActiveDirectoryStructure) {
-    Import-Module ActiveDirectoryStructure -ErrorAction SilentlyContinue
-}
-if (Get-Module -ListAvailable -Name Testimo) {
-    Import-Module Testimo -ErrorAction SilentlyContinue
-}
-
 # ---- QoL ----
 function ll { Get-ChildItem -Force }
 function la { Get-ChildItem -Force }
@@ -296,8 +288,6 @@ Write-Host "`n[4/12] Configuring Elite PowerShell Profiles (All Users)..." -Fore
 
 Trust-PSGallery
 Install-PSModuleSafe -Name "PSFzf"
-Install-PSModuleSafe -Name "ActiveDirectoryStructure"
-Install-PSModuleSafe -Name "Testimo"
 
 $winPSAllUsersProfile = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\profile.ps1'
 Write-ElitePowerShellProfile -ProfilePath $winPSAllUsersProfile
