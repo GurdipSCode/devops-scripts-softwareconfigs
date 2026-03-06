@@ -45,8 +45,8 @@ function Trust-PSGallery {
         try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {}
 
         if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
-            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop | Out-Null
-        }
+Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope AllUsers -Force -Confirm:$false -ErrorAction Stop | Out-Null 
+}
 
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop | Out-Null
         Write-Ok "PSGallery set to Trusted"
@@ -64,10 +64,11 @@ function Install-PSModuleSafe {
             Write-Info "Module already installed: $Name"
             return
         }
-        Install-Module -Name $Name -Scope AllUsers -Force -AllowClobber -ErrorAction Stop | Out-Null
-        Write-Ok "Installed PowerShell module (AllUsers): $Name"
+            Install-Module -Name $Name -Scope AllUsers -Force -AllowClobber -Confirm:$false -ErrorAction Stop | Out-Null   
+            Write-Ok "Installed PowerShell module (AllUsers): $Name"
     } catch {
         Write-Warn "Failed to install module '$Name': $($_.Exception.Message)"
+        
     }
 }
 
@@ -421,7 +422,7 @@ Write-Host "`n[12/12] Installing Microsoft OSConfig Security Baseline..." -Foreg
 
 Trust-PSGallery
 try {
-    Install-Module -Name Microsoft.OSConfig -Scope AllUsers -Repository PSGallery -Force -ErrorAction Stop | Out-Null
+    Install-Module -Name Microsoft.OSConfig -Scope AllUsers -Repository PSGallery -Force -Confirm:$false -ErrorAction Stop | Out-Null    
     Write-Ok "OSConfig module installed"
 } catch {
     Write-Warn "OSConfig install failed: $($_.Exception.Message)"
