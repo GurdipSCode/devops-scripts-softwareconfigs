@@ -226,7 +226,7 @@ Read-Host "Press Enter to continue or Ctrl+C to abort"
 # ============================================================================
 # SECTION 1: PACKAGE MANAGERS
 # ============================================================================
-Write-Host "`n[1/12] Installing Package Managers..." -ForegroundColor Yellow
+Write-Host "`n[1/13] Installing Package Managers..." -ForegroundColor Yellow
 
 Set-ExecutionPolicy Bypass -Scope Process -Force
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {}
@@ -248,7 +248,7 @@ try { scoop bucket add extras | Out-Null } catch {}
 # ============================================================================
 # SECTION 2: PACKAGES VIA CHOCOLATEY
 # ============================================================================
-Write-Host "`n[2/12] Installing Chocolatey Packages..." -ForegroundColor Yellow
+Write-Host "`n[2/13] Installing Chocolatey Packages..." -ForegroundColor Yellow
 
 $chocoPkgs = @(
     "git","notepadplusplus","sysinternals","glances","pwsh","osquery","poshgit","winmtr",
@@ -272,7 +272,7 @@ foreach ($p in $chocoPkgs) {
 # ============================================================================
 # SECTION 3: PACKAGES VIA SCOOP
 # ============================================================================
-Write-Host "`n[3/12] Installing Scoop Packages..." -ForegroundColor Yellow
+Write-Host "`n[3/13] Installing Scoop Packages..." -ForegroundColor Yellow
 
 $scoopPkgs = @(
     "btop",
@@ -284,9 +284,36 @@ $scoopPkgs = @(
 foreach ($pkg in $scoopPkgs) { Invoke-ScoopInstallSafe -PackageId $pkg }
 
 # ============================================================================
-# SECTION 4: ELITE POWERSHELL PROFILE (ALL USERS) + MODULES + TERMINAL FONT
+# SECTION 4: PYTHON PIP + GLANCES (pip)
 # ============================================================================
-Write-Host "`n[4/12] Configuring Elite PowerShell Profiles (All Users)..." -ForegroundColor Yellow
+Write-Host "`n[4/13] Installing Python pip and Glances via pip..." -ForegroundColor Yellow
+
+try {
+    Write-Info "Bootstrapping pip via get-pip.py..."
+    $u = "https://bootstrap.pypa.io/get-pip.py"
+    $f = "$env:TEMP\get-pip.py"
+    Invoke-WebRequest $u -OutFile $f -UseBasicParsing
+    py $f
+    Remove-Item $f -Force
+    Write-Ok "pip installed/updated"
+} catch {
+    Write-Warn "pip bootstrap failed: $($_.Exception.Message)"
+    Write-Warn "Continuing..."
+}
+
+try {
+    Write-Info "Installing glances via pip..."
+    pip install glances
+    Write-Ok "glances installed via pip"
+} catch {
+    Write-Warn "pip install glances failed: $($_.Exception.Message)"
+    Write-Warn "Continuing..."
+}
+
+# ============================================================================
+# SECTION 5: ELITE POWERSHELL PROFILE (ALL USERS) + MODULES + TERMINAL FONT
+# ============================================================================
+Write-Host "`n[5/13] Configuring Elite PowerShell Profiles (All Users)..." -ForegroundColor Yellow
 
 Trust-PSGallery
 Install-PSModuleSafe -Name "PSFzf"
@@ -341,9 +368,9 @@ Write-Host "`n  Configuring Windows Terminal defaults to Nerd Font + size 9..." 
 Update-WindowsTerminalSettings -FontFace $nerdFontFace -FontSize 9
 
 # ============================================================================
-# SECTION 5: PERFORMANCE OPTIMIZATIONS
+# SECTION 6: PERFORMANCE OPTIMIZATIONS
 # ============================================================================
-Write-Host "`n[5/12] Applying Performance Optimizations..." -ForegroundColor Yellow
+Write-Host "`n[6/13] Applying Performance Optimizations..." -ForegroundColor Yellow
 
 powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
 Write-Ok "Power plan set to High Performance"
@@ -370,9 +397,9 @@ foreach ($svc in $servicesToDisable) {
 }
 
 # ============================================================================
-# SECTION 6: NETWORK OPTIMIZATIONS
+# SECTION 7: NETWORK OPTIMIZATIONS
 # ============================================================================
-Write-Host "`n[6/12] Applying Network Optimizations..." -ForegroundColor Yellow
+Write-Host "`n[7/13] Applying Network Optimizations..." -ForegroundColor Yellow
 
 netsh int tcp set global autotuninglevel=normal
 netsh int tcp set global rss=enabled
@@ -382,9 +409,9 @@ netsh int tcp set global nonsackrttresiliency=disabled
 Write-Ok "TCP settings optimized"
 
 # ============================================================================
-# SECTION 7: DISK / STORAGE OPTIMIZATIONS
+# SECTION 8: DISK / STORAGE OPTIMIZATIONS
 # ============================================================================
-Write-Host "`n[7/12] Applying Disk & Storage Optimizations..." -ForegroundColor Yellow
+Write-Host "`n[8/13] Applying Disk & Storage Optimizations..." -ForegroundColor Yellow
 
 fsutil behavior set disable8dot3 1
 fsutil behavior set disablelastaccess 1
@@ -392,9 +419,9 @@ fsutil behavior set disabledeletenotify 0
 Write-Ok "Disk optimizations applied (8.3 off, last access off, TRIM enabled)"
 
 # ============================================================================
-# SECTION 8: SECURITY HARDENING - SMB
+# SECTION 9: SECURITY HARDENING - SMB
 # ============================================================================
-Write-Host "`n[8/12] Applying SMB Hardening..." -ForegroundColor Yellow
+Write-Host "`n[9/13] Applying SMB Hardening..." -ForegroundColor Yellow
 
 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "SMB1" -Value 0 -Type DWord -Force
 Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force -ErrorAction SilentlyContinue
@@ -404,9 +431,9 @@ Set-SmbServerConfiguration -EncryptData $true -Force -ErrorAction SilentlyContin
 Write-Ok "SMB hardening applied"
 
 # ============================================================================
-# SECTION 9: SECURITY HARDENING - TLS/SSL
+# SECTION 10: SECURITY HARDENING - TLS/SSL
 # ============================================================================
-Write-Host "`n[9/12] Applying TLS/SSL Hardening..." -ForegroundColor Yellow
+Write-Host "`n[10/13] Applying TLS/SSL Hardening..." -ForegroundColor Yellow
 
 $protocolBase = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols"
 @(
@@ -425,26 +452,26 @@ $protocolBase = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANN
 Write-Ok "TLS/SSL hardening applied"
 
 # ============================================================================
-# SECTION 10: ACCOUNT & ACCESS POLICIES
+# SECTION 11: ACCOUNT & ACCESS POLICIES
 # ============================================================================
-Write-Host "`n[10/12] Applying Account & Access Hardening..." -ForegroundColor Yellow
+Write-Host "`n[11/13] Applying Account & Access Hardening..." -ForegroundColor Yellow
 
 net accounts /lockoutthreshold:3 /lockoutduration:30 /lockoutwindow:30
 net accounts /minpwlen:14 /maxpwage:365 /minpwage:1 /uniquepw:24
 Write-Ok "Account policies applied"
 
 # ============================================================================
-# SECTION 11: FIREWALL DISABLE (PER REQUEST)
+# SECTION 12: FIREWALL DISABLE (PER REQUEST)
 # ============================================================================
-Write-Host "`n[11/12] Disabling Windows Firewall (per request)..." -ForegroundColor Yellow
+Write-Host "`n[12/13] Disabling Windows Firewall (per request)..." -ForegroundColor Yellow
 
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 Write-Bad "Windows Firewall DISABLED on Domain/Public/Private profiles"
 
 # ============================================================================
-# SECTION 12: OSConfig Baseline (install only)
+# SECTION 13: OSConfig Baseline (install only)
 # ============================================================================
-Write-Host "`n[12/12] Installing Microsoft OSConfig Security Baseline..." -ForegroundColor Yellow
+Write-Host "`n[13/13] Installing Microsoft OSConfig Security Baseline..." -ForegroundColor Yellow
 
 Trust-PSGallery
 try {
