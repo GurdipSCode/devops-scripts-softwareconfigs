@@ -252,7 +252,7 @@ Write-Host "`n[2/12] Installing Chocolatey Packages..." -ForegroundColor Yellow
 
 $chocoPkgs = @(
     "git","notepadplusplus","sysinternals","glances","pwsh","osquery","poshgit","winmtr",
-    "devolutions-agent","cnspec","cnquery","cloudbase-init",
+    "pingplotter","cnspec","cnquery","cloudbaseinit",
     "terminal-icons.powershell","fzf","zoxide","microsoft-windows-terminal","nerd-fonts-firacode",
     "nerd-fonts-cascadiacode"
 )
