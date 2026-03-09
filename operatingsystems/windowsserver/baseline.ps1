@@ -188,16 +188,19 @@ function Update-WindowsTerminalSettings {
             $raw = Get-Content -Path $path -Raw -ErrorAction Stop
             if ([string]::IsNullOrWhiteSpace($raw)) { throw "settings.json is empty" }
 
-            $json = $raw | ConvertFrom-Json -ErrorAction Stop
+            # ConvertFrom-Json produces read-only PSCustomObjects in older PS versions
+            # Round-trip through hashtable via JSON to get fully mutable objects
+            $data = $raw | ConvertFrom-Json -ErrorAction Stop | ConvertTo-Json -Depth 60 | ConvertFrom-Json -AsHashtable -ErrorAction Stop
 
-            if (-not $json.profiles) { $json | Add-Member -NotePropertyName profiles -NotePropertyValue ([pscustomobject]@{}) -Force }
-            if (-not $json.profiles.defaults) { $json.profiles | Add-Member -NotePropertyName defaults -NotePropertyValue ([pscustomobject]@{}) -Force }
-            if (-not $json.profiles.defaults.font) { $json.profiles.defaults | Add-Member -NotePropertyName font -NotePropertyValue ([pscustomobject]@{}) -Force }
+            # Build nested structure safely
+            if (-not $data.ContainsKey('profiles'))                          { $data['profiles']  = @{} }
+            if (-not $data['profiles'].ContainsKey('defaults'))              { $data['profiles']['defaults'] = @{} }
+            if (-not $data['profiles']['defaults'].ContainsKey('font'))      { $data['profiles']['defaults']['font'] = @{} }
 
-            $json.profiles.defaults.font.face = $FontFace
-            $json.profiles.defaults.font.size = $FontSize
+            $data['profiles']['defaults']['font']['face'] = $FontFace
+            $data['profiles']['defaults']['font']['size'] = $FontSize
 
-            $out = $json | ConvertTo-Json -Depth 60
+            $out = $data | ConvertTo-Json -Depth 60
             Set-Content -Path $path -Value $out -Encoding UTF8 -Force
 
             Write-Ok "Terminal defaults set: font='$FontFace' size=$FontSize"
