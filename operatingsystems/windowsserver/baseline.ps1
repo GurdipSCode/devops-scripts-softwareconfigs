@@ -45,8 +45,8 @@ function Trust-PSGallery {
         try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {}
 
         if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
-Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope AllUsers -Force -Confirm:$false -ErrorAction Stop | Out-Null 
-}
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope AllUsers -Force -Confirm:$false -ErrorAction Stop | Out-Null
+        }
 
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop | Out-Null
         Write-Ok "PSGallery set to Trusted"
@@ -64,11 +64,10 @@ function Install-PSModuleSafe {
             Write-Info "Module already installed: $Name"
             return
         }
-            Install-Module -Name $Name -Scope AllUsers -Force -AllowClobber -Confirm:$false -ErrorAction Stop | Out-Null   
-            Write-Ok "Installed PowerShell module (AllUsers): $Name"
+        Install-Module -Name $Name -Scope AllUsers -Force -AllowClobber -Confirm:$false -ErrorAction Stop | Out-Null
+        Write-Ok "Installed PowerShell module (AllUsers): $Name"
     } catch {
         Write-Warn "Failed to install module '$Name': $($_.Exception.Message)"
-        
     }
 }
 
@@ -288,6 +287,7 @@ Write-Host "`n[4/12] Configuring Elite PowerShell Profiles (All Users)..." -Fore
 
 Trust-PSGallery
 Install-PSModuleSafe -Name "PSFzf"
+Install-PSModuleSafe -Name "Terminal-Icons"
 
 $winPSAllUsersProfile = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\profile.ps1'
 Write-ElitePowerShellProfile -ProfilePath $winPSAllUsersProfile
@@ -360,7 +360,7 @@ Write-Ok "Disk optimizations applied (8.3 off, last access off, TRIM enabled)"
 # ============================================================================
 Write-Host "`n[8/12] Applying SMB Hardening..." -ForegroundColor Yellow
 
-Disable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -NoRestart -ErrorAction SilentlyContinue | Out-Null
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "SMB1" -Value 0 -Type DWord -Force
 Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force -ErrorAction SilentlyContinue
 Set-SmbServerConfiguration -RequireSecuritySignature $true -Force -ErrorAction SilentlyContinue
 Set-SmbClientConfiguration -RequireSecuritySignature $true -Force -ErrorAction SilentlyContinue
@@ -412,7 +412,7 @@ Write-Host "`n[12/12] Installing Microsoft OSConfig Security Baseline..." -Foreg
 
 Trust-PSGallery
 try {
-    Install-Module -Name Microsoft.OSConfig -Scope AllUsers -Repository PSGallery -Force -Confirm:$false -ErrorAction Stop | Out-Null    
+    Install-Module -Name Microsoft.OSConfig -Scope AllUsers -Repository PSGallery -Force -Confirm:$false -ErrorAction Stop | Out-Null
     Write-Ok "OSConfig module installed"
 } catch {
     Write-Warn "OSConfig install failed: $($_.Exception.Message)"
