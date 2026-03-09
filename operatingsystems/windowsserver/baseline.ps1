@@ -293,16 +293,49 @@ $winPSAllUsersProfile = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\p
 Write-ElitePowerShellProfile -ProfilePath $winPSAllUsersProfile
 
 $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
-if ($pwshCmd -and $pwshCmd.Source) {
-    $pwshInstallDir = Split-Path -Path $pwshCmd.Source -Parent
-    $pwshAllUsersProfile = Join-Path $pwshInstallDir 'profile.ps1'
-    Write-ElitePowerShellProfile -ProfilePath $pwshAllUsersProfile
+if ($pwshCmd) {
+    $pwshAllUsersProfile = & pwsh -NoProfile -Command '$PROFILE.AllUsersAllHosts'
+    if ($pwshAllUsersProfile) {
+        Write-ElitePowerShellProfile -ProfilePath $pwshAllUsersProfile
+    } else {
+        Write-Warn "Could not determine pwsh AllUsersAllHosts profile path."
+    }
 } else {
     Write-Warn "pwsh not found; skipping pwsh ALL USERS profile update."
 }
 
+Write-Host "`n  Detecting installed Nerd Font name..." -ForegroundColor Cyan
+
+# Probe registry for the exact registered font face name
+$nerdFontFace = $null
+$fontSearchNames = @("FiraCode NF", "FiraCode Nerd Font Mono", "FiraCode Nerd Font", "CaskaydiaCove NF", "CaskaydiaCove Nerd Font Mono")
+$fontRegPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts",
+    "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+)
+foreach ($regPath in $fontRegPaths) {
+    if ($nerdFontFace) { break }
+    $registeredFonts = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+    if ($registeredFonts) {
+        foreach ($candidate in $fontSearchNames) {
+            $match = $registeredFonts.PSObject.Properties | Where-Object { $_.Name -like "*$candidate*" }
+            if ($match) {
+                # Strip weight suffixes to get the face name Windows Terminal expects
+                $nerdFontFace = $candidate
+                break
+            }
+        }
+    }
+}
+
+if (-not $nerdFontFace) {
+    Write-Warn "Could not detect Nerd Font in registry — defaulting to 'FiraCode NF'"
+    $nerdFontFace = "FiraCode NF"
+}
+
+Write-Ok "Using font face: $nerdFontFace"
 Write-Host "`n  Configuring Windows Terminal defaults to Nerd Font + size 9..." -ForegroundColor Cyan
-Update-WindowsTerminalSettings -FontFace "FiraCode Nerd Font" -FontSize 9
+Update-WindowsTerminalSettings -FontFace $nerdFontFace -FontSize 9
 
 # ============================================================================
 # SECTION 5: PERFORMANCE OPTIMIZATIONS
