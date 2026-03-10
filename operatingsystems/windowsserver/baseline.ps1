@@ -32,7 +32,6 @@ function Invoke-ScoopInstallSafe {
             Write-Warn "Scoop: $PackageId already installed / file exists — continuing"
             return
         }
-        # FIX: ${PackageId}: avoids "$PackageId:" being parsed as a drive-qualified variable
         Write-Warn "Scoop install failed for ${PackageId}: $msg"
         Write-Warn "Continuing..."
     }
@@ -68,6 +67,94 @@ function Install-PSModuleSafe {
         Write-Ok "Installed PowerShell module (AllUsers): $Name"
     } catch {
         Write-Warn "Failed to install module '$Name': $($_.Exception.Message)"
+    }
+}
+
+# ============================================================================
+# Install-MsiFromNexus
+# Downloads a list of MSI filenames from a Nexus raw repo and installs them.
+#
+# Parameters:
+#   -NexusBaseUrl   : Base URL of the Nexus raw repo, no trailing slash
+#                     e.g. "http://nexus:8081/repository/msi-packages"
+#   -MsiNames       : Array of MSI filenames (just the filename, no path)
+#                     e.g. @("Action1.msi", "MyApp-1.0.0.msi")
+#   -InstallArgs    : msiexec arguments (default: /qn /norestart)
+#   -NexusUser      : Optional Nexus username (if auth required)
+#   -NexusPassword  : Optional Nexus password (if auth required)
+# ============================================================================
+function Install-MsiFromNexus {
+    param(
+        [Parameter(Mandatory)][string]   $NexusBaseUrl,
+        [Parameter(Mandatory)][string[]] $MsiNames,
+        [string] $InstallArgs   = "/qn /norestart",
+        [string] $NexusUser     = "",
+        [string] $NexusPassword = ""
+    )
+
+    # Build auth header once if credentials supplied
+    $headers = @{}
+    if ($NexusUser -and $NexusPassword) {
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${NexusUser}:${NexusPassword}"))
+        $headers["Authorization"] = "Basic $encoded"
+    }
+
+    $results = @{ Success = @(); Failed = @() }
+
+    foreach ($msiName in $MsiNames) {
+        $url  = "$NexusBaseUrl/$msiName"
+        $dest = "$env:TEMP\$msiName"
+
+        Write-Info "[$msiName] Downloading from $url ..."
+
+        try {
+            $iwrParams = @{
+                Uri             = $url
+                OutFile         = $dest
+                UseBasicParsing = $true
+                ErrorAction     = "Stop"
+            }
+            if ($headers.Count -gt 0) { $iwrParams["Headers"] = $headers }
+            Invoke-WebRequest @iwrParams
+            Write-Ok "[$msiName] Downloaded"
+        } catch {
+            Write-Warn "[$msiName] Download failed: $($_.Exception.Message)"
+            $results.Failed += $msiName
+            continue
+        }
+
+        Write-Info "[$msiName] Installing..."
+
+        try {
+            $proc = Start-Process msiexec.exe `
+                -ArgumentList "/i `"$dest`" $InstallArgs" `
+                -Wait -PassThru -ErrorAction Stop
+
+            switch ($proc.ExitCode) {
+                0    { Write-Ok   "[$msiName] Installed successfully" }
+                3010 { Write-Ok   "[$msiName] Installed — reboot required to complete" }
+                1638 { Write-Warn "[$msiName] Another version already installed — skipping" }
+                1641 { Write-Ok   "[$msiName] Installed — reboot initiated by installer" }
+                default {
+                    Write-Warn "[$msiName] Installer exited with code $($proc.ExitCode)"
+                    $results.Failed += $msiName
+                    continue
+                }
+            }
+            $results.Success += $msiName
+        } catch {
+            Write-Warn "[$msiName] Install failed: $($_.Exception.Message)"
+            $results.Failed += $msiName
+        } finally {
+            Remove-Item $dest -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Summary
+    Write-Host ""
+    Write-Ok   "MSI installs complete — $($results.Success.Count) succeeded, $($results.Failed.Count) failed"
+    if ($results.Failed.Count -gt 0) {
+        Write-Warn "Failed packages: $($results.Failed -join ', ')"
     }
 }
 
@@ -188,11 +275,8 @@ function Update-WindowsTerminalSettings {
             $raw = Get-Content -Path $path -Raw -ErrorAction Stop
             if ([string]::IsNullOrWhiteSpace($raw)) { throw "settings.json is empty" }
 
-            # ConvertFrom-Json produces read-only PSCustomObjects in older PS versions
-            # Round-trip through hashtable via JSON to get fully mutable objects
             $data = $raw | ConvertFrom-Json -ErrorAction Stop | ConvertTo-Json -Depth 60 | ConvertFrom-Json -AsHashtable -ErrorAction Stop
 
-            # Build nested structure safely
             if (-not $data.ContainsKey('profiles'))                          { $data['profiles']  = @{} }
             if (-not $data['profiles'].ContainsKey('defaults'))              { $data['profiles']['defaults'] = @{} }
             if (-not $data['profiles']['defaults'].ContainsKey('font'))      { $data['profiles']['defaults']['font'] = @{} }
@@ -226,7 +310,7 @@ Read-Host "Press Enter to continue or Ctrl+C to abort"
 # ============================================================================
 # SECTION 1: PACKAGE MANAGERS
 # ============================================================================
-Write-Host "`n[1/13] Installing Package Managers..." -ForegroundColor Yellow
+Write-Host "`n[1/14] Installing Package Managers..." -ForegroundColor Yellow
 
 Set-ExecutionPolicy Bypass -Scope Process -Force
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {}
@@ -248,7 +332,7 @@ try { scoop bucket add extras | Out-Null } catch {}
 # ============================================================================
 # SECTION 2: PACKAGES VIA CHOCOLATEY
 # ============================================================================
-Write-Host "`n[2/13] Installing Chocolatey Packages..." -ForegroundColor Yellow
+Write-Host "`n[2/14] Installing Chocolatey Packages..." -ForegroundColor Yellow
 
 $chocoPkgs = @(
     "git","notepadplusplus","sysinternals","glances","pwsh","osquery","poshgit","winmtr",
@@ -263,7 +347,6 @@ foreach ($p in $chocoPkgs) {
         choco install $p -y
         Write-Ok "Installed: $p"
     } catch {
-        # FIX: ${p}: avoids "$p:" parser issue
         Write-Warn "Chocolatey install failed for ${p}: $($_.Exception.Message)"
         Write-Warn "Continuing..."
     }
@@ -272,7 +355,7 @@ foreach ($p in $chocoPkgs) {
 # ============================================================================
 # SECTION 3: PACKAGES VIA SCOOP
 # ============================================================================
-Write-Host "`n[3/13] Installing Scoop Packages..." -ForegroundColor Yellow
+Write-Host "`n[3/14] Installing Scoop Packages..." -ForegroundColor Yellow
 
 $scoopPkgs = @(
     "btop",
@@ -286,7 +369,7 @@ foreach ($pkg in $scoopPkgs) { Invoke-ScoopInstallSafe -PackageId $pkg }
 # ============================================================================
 # SECTION 4: PYTHON PIP + GLANCES (pip)
 # ============================================================================
-Write-Host "`n[4/13] Installing Python pip and Glances via pip..." -ForegroundColor Yellow
+Write-Host "`n[4/14] Installing Python pip and Glances via pip..." -ForegroundColor Yellow
 
 try {
     Write-Info "Bootstrapping pip via get-pip.py..."
@@ -311,9 +394,33 @@ try {
 }
 
 # ============================================================================
-# SECTION 5: ELITE POWERSHELL PROFILE (ALL USERS) + MODULES + TERMINAL FONT
+# SECTION 5: MSI PACKAGES FROM NEXUS
 # ============================================================================
-Write-Host "`n[5/13] Configuring Elite PowerShell Profiles (All Users)..." -ForegroundColor Yellow
+Write-Host "`n[5/14] Installing MSI packages from Nexus..." -ForegroundColor Yellow
+
+# -------------------------------------------------------------------
+# CONFIG — update these to match your Nexus server and repo
+# -------------------------------------------------------------------
+$nexusBaseUrl   = "http://10.0.0.49:8081/repository/msi-packages"
+$nexusUser      = ""       # leave empty string "" for anonymous
+$nexusPassword  = ""    # leave empty string "" for anonymous
+
+$nexusMsiList = @(
+    "action1_agent(GurdipDevOps).msi"
+    "DevolutionsAgent-x86_64-2026.1.0.0.msi"
+)
+# -------------------------------------------------------------------
+
+Install-MsiFromNexus `
+    -NexusBaseUrl   $nexusBaseUrl `
+    -MsiNames       $nexusMsiList `
+    -NexusUser      $nexusUser `
+    -NexusPassword  $nexusPassword
+
+# ============================================================================
+# SECTION 6: ELITE POWERSHELL PROFILE (ALL USERS) + MODULES + TERMINAL FONT
+# ============================================================================
+Write-Host "`n[6/14] Configuring Elite PowerShell Profiles (All Users)..." -ForegroundColor Yellow
 
 Trust-PSGallery
 Install-PSModuleSafe -Name "PSFzf"
@@ -336,7 +443,6 @@ if ($pwshCmd) {
 
 Write-Host "`n  Detecting installed Nerd Font name..." -ForegroundColor Cyan
 
-# Probe registry for the exact registered font face name
 $nerdFontFace = $null
 $fontSearchNames = @("FiraCode NF", "FiraCode Nerd Font Mono", "FiraCode Nerd Font", "CaskaydiaCove NF", "CaskaydiaCove Nerd Font Mono")
 $fontRegPaths = @(
@@ -350,7 +456,6 @@ foreach ($regPath in $fontRegPaths) {
         foreach ($candidate in $fontSearchNames) {
             $match = $registeredFonts.PSObject.Properties | Where-Object { $_.Name -like "*$candidate*" }
             if ($match) {
-                # Strip weight suffixes to get the face name Windows Terminal expects
                 $nerdFontFace = $candidate
                 break
             }
@@ -368,9 +473,9 @@ Write-Host "`n  Configuring Windows Terminal defaults to Nerd Font + size 9..." 
 Update-WindowsTerminalSettings -FontFace $nerdFontFace -FontSize 9
 
 # ============================================================================
-# SECTION 6: PERFORMANCE OPTIMIZATIONS
+# SECTION 7: PERFORMANCE OPTIMIZATIONS
 # ============================================================================
-Write-Host "`n[6/13] Applying Performance Optimizations..." -ForegroundColor Yellow
+Write-Host "`n[7/14] Applying Performance Optimizations..." -ForegroundColor Yellow
 
 powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
 Write-Ok "Power plan set to High Performance"
@@ -397,9 +502,9 @@ foreach ($svc in $servicesToDisable) {
 }
 
 # ============================================================================
-# SECTION 7: NETWORK OPTIMIZATIONS
+# SECTION 8: NETWORK OPTIMIZATIONS
 # ============================================================================
-Write-Host "`n[7/13] Applying Network Optimizations..." -ForegroundColor Yellow
+Write-Host "`n[8/14] Applying Network Optimizations..." -ForegroundColor Yellow
 
 netsh int tcp set global autotuninglevel=normal
 netsh int tcp set global rss=enabled
@@ -409,9 +514,9 @@ netsh int tcp set global nonsackrttresiliency=disabled
 Write-Ok "TCP settings optimized"
 
 # ============================================================================
-# SECTION 8: DISK / STORAGE OPTIMIZATIONS
+# SECTION 9: DISK / STORAGE OPTIMIZATIONS
 # ============================================================================
-Write-Host "`n[8/13] Applying Disk & Storage Optimizations..." -ForegroundColor Yellow
+Write-Host "`n[9/14] Applying Disk & Storage Optimizations..." -ForegroundColor Yellow
 
 fsutil behavior set disable8dot3 1
 fsutil behavior set disablelastaccess 1
@@ -419,9 +524,9 @@ fsutil behavior set disabledeletenotify 0
 Write-Ok "Disk optimizations applied (8.3 off, last access off, TRIM enabled)"
 
 # ============================================================================
-# SECTION 9: SECURITY HARDENING - SMB
+# SECTION 10: SECURITY HARDENING - SMB
 # ============================================================================
-Write-Host "`n[9/13] Applying SMB Hardening..." -ForegroundColor Yellow
+Write-Host "`n[10/14] Applying SMB Hardening..." -ForegroundColor Yellow
 
 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "SMB1" -Value 0 -Type DWord -Force
 Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force -ErrorAction SilentlyContinue
@@ -431,9 +536,9 @@ Set-SmbServerConfiguration -EncryptData $true -Force -ErrorAction SilentlyContin
 Write-Ok "SMB hardening applied"
 
 # ============================================================================
-# SECTION 10: SECURITY HARDENING - TLS/SSL
+# SECTION 11: SECURITY HARDENING - TLS/SSL
 # ============================================================================
-Write-Host "`n[10/13] Applying TLS/SSL Hardening..." -ForegroundColor Yellow
+Write-Host "`n[11/14] Applying TLS/SSL Hardening..." -ForegroundColor Yellow
 
 $protocolBase = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols"
 @(
@@ -452,26 +557,26 @@ $protocolBase = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANN
 Write-Ok "TLS/SSL hardening applied"
 
 # ============================================================================
-# SECTION 11: ACCOUNT & ACCESS POLICIES
+# SECTION 12: ACCOUNT & ACCESS POLICIES
 # ============================================================================
-Write-Host "`n[11/13] Applying Account & Access Hardening..." -ForegroundColor Yellow
+Write-Host "`n[12/14] Applying Account & Access Hardening..." -ForegroundColor Yellow
 
 net accounts /lockoutthreshold:3 /lockoutduration:30 /lockoutwindow:30
 net accounts /minpwlen:14 /maxpwage:365 /minpwage:1 /uniquepw:24
 Write-Ok "Account policies applied"
 
 # ============================================================================
-# SECTION 12: FIREWALL DISABLE (PER REQUEST)
+# SECTION 13: FIREWALL DISABLE (PER REQUEST)
 # ============================================================================
-Write-Host "`n[12/13] Disabling Windows Firewall (per request)..." -ForegroundColor Yellow
+Write-Host "`n[13/14] Disabling Windows Firewall (per request)..." -ForegroundColor Yellow
 
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 Write-Bad "Windows Firewall DISABLED on Domain/Public/Private profiles"
 
 # ============================================================================
-# SECTION 13: OSConfig Baseline (install only)
+# SECTION 14: OSConfig Baseline (install only)
 # ============================================================================
-Write-Host "`n[13/13] Installing Microsoft OSConfig Security Baseline..." -ForegroundColor Yellow
+Write-Host "`n[14/14] Installing Microsoft OSConfig Security Baseline..." -ForegroundColor Yellow
 
 Trust-PSGallery
 try {
