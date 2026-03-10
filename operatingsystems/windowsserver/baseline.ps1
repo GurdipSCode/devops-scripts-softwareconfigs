@@ -336,7 +336,7 @@ try { scoop bucket add extras | Out-Null } catch {}
 Write-Host "`n[2/14] Installing Chocolatey Packages..." -ForegroundColor Yellow
 
 $chocoPkgs = @(
-    "git","notepadplusplus","sysinternals","python","pwsh","osquery","poshgit","winmtr",
+    "git","notepadplusplus","sysinternals","python","pwsh","osquery","poshgit",
     "pingplotter","cnspec","cnquery","cloudbaseinit",
     "terminal-icons.powershell","fzf","zoxide","microsoft-windows-terminal","nerd-fonts-firacode",
     "nerd-fonts-cascadiacode"
