@@ -275,11 +275,13 @@ function Update-WindowsTerminalSettings {
             $raw = Get-Content -Path $path -Raw -ErrorAction Stop
             if ([string]::IsNullOrWhiteSpace($raw)) { throw "settings.json is empty" }
 
+            # ConvertFrom-Json produces read-only PSCustomObjects in older PS versions
+            # Round-trip through hashtable via JSON to get fully mutable objects
             $data = $raw | ConvertFrom-Json -ErrorAction Stop | ConvertTo-Json -Depth 60 | ConvertFrom-Json -AsHashtable -ErrorAction Stop
 
-            if (-not $data.ContainsKey('profiles'))                          { $data['profiles']  = @{} }
-            if (-not $data['profiles'].ContainsKey('defaults'))              { $data['profiles']['defaults'] = @{} }
-            if (-not $data['profiles']['defaults'].ContainsKey('font'))      { $data['profiles']['defaults']['font'] = @{} }
+            if (-not $data.ContainsKey('profiles'))                     { $data['profiles'] = @{} }
+            if (-not $data['profiles'].ContainsKey('defaults'))         { $data['profiles']['defaults'] = @{} }
+            if (-not $data['profiles']['defaults'].ContainsKey('font')) { $data['profiles']['defaults']['font'] = @{} }
 
             $data['profiles']['defaults']['font']['face'] = $FontFace
             $data['profiles']['defaults']['font']['size'] = $FontSize
@@ -328,14 +330,13 @@ if (Get-Command scoop -ErrorAction SilentlyContinue) {
 
 try { scoop bucket add extras | Out-Null } catch {}
 
-
 # ============================================================================
 # SECTION 2: PACKAGES VIA CHOCOLATEY
 # ============================================================================
 Write-Host "`n[2/14] Installing Chocolatey Packages..." -ForegroundColor Yellow
 
 $chocoPkgs = @(
-    "git","notepadplusplus","sysinternals","glances","pwsh","osquery","poshgit","winmtr",
+    "git","notepadplusplus","sysinternals","python","pwsh","osquery","poshgit","winmtr",
     "pingplotter","cnspec","cnquery","cloudbaseinit",
     "terminal-icons.powershell","fzf","zoxide","microsoft-windows-terminal","nerd-fonts-firacode",
     "nerd-fonts-cascadiacode"
@@ -351,6 +352,11 @@ foreach ($p in $chocoPkgs) {
         Write-Warn "Continuing..."
     }
 }
+
+# Refresh PATH so choco-installed tools (python, etc.) are visible in this session
+Write-Info "Refreshing PATH after Chocolatey installs..."
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+Write-Ok "PATH refreshed"
 
 # ============================================================================
 # SECTION 3: PACKAGES VIA SCOOP
@@ -371,26 +377,47 @@ foreach ($pkg in $scoopPkgs) { Invoke-ScoopInstallSafe -PackageId $pkg }
 # ============================================================================
 Write-Host "`n[4/14] Installing Python pip and Glances via pip..." -ForegroundColor Yellow
 
-try {
-    Write-Info "Bootstrapping pip via get-pip.py..."
-    $u = "https://bootstrap.pypa.io/get-pip.py"
-    $f = "$env:TEMP\get-pip.py"
-    Invoke-WebRequest $u -OutFile $f -UseBasicParsing
-    py $f
-    Remove-Item $f -Force
-    Write-Ok "pip installed/updated"
-} catch {
-    Write-Warn "pip bootstrap failed: $($_.Exception.Message)"
-    Write-Warn "Continuing..."
+# Resolve python executable — try py launcher, then python, then choco install paths
+$pyExe = $null
+foreach ($candidate in @("py", "python")) {
+    $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($resolved) { $pyExe = $resolved.Source; break }
+}
+if (-not $pyExe) {
+    $pyExe = Get-Item "C:\Python3*\python.exe" -ErrorAction SilentlyContinue |
+             Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
+}
+if (-not $pyExe) {
+    $pyExe = Get-Item "C:\tools\python*\python.exe" -ErrorAction SilentlyContinue |
+             Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
 }
 
-try {
-    Write-Info "Installing glances via pip..."
-    pip install glances
-    Write-Ok "glances installed via pip"
-} catch {
-    Write-Warn "pip install glances failed: $($_.Exception.Message)"
-    Write-Warn "Continuing..."
+if ($pyExe) {
+    Write-Info "Using Python: $pyExe"
+
+    try {
+        Write-Info "Bootstrapping pip via get-pip.py..."
+        $getPipPath = "$env:TEMP\get-pip.py"
+        (New-Object System.Net.WebClient).DownloadFile("https://bootstrap.pypa.io/get-pip.py", $getPipPath)
+        & $pyExe $getPipPath --quiet
+        Remove-Item $getPipPath -Force -ErrorAction SilentlyContinue
+        Write-Ok "pip installed/updated"
+    } catch {
+        Write-Warn "pip bootstrap failed: $($_.Exception.Message)"
+        Write-Warn "Continuing..."
+    }
+
+    try {
+        Write-Info "Installing glances via pip..."
+        & $pyExe -m pip install glances --quiet
+        Write-Ok "glances installed via pip"
+    } catch {
+        Write-Warn "pip install glances failed: $($_.Exception.Message)"
+        Write-Warn "Continuing..."
+    }
+} else {
+    Write-Warn "Python not found after PATH refresh — skipping pip/glances install"
+    Write-Warn "Ensure python is installed and re-run, or install manually: py -m pip install glances"
 }
 
 # ============================================================================
@@ -402,7 +429,7 @@ Write-Host "`n[5/14] Installing MSI packages from Nexus..." -ForegroundColor Yel
 # CONFIG — update these to match your Nexus server and repo
 # -------------------------------------------------------------------
 $nexusBaseUrl   = "http://10.0.0.49:8081/repository/msi-packages"
-$nexusUser      = ""       # leave empty string "" for anonymous
+$nexusUser      = ""    # leave empty string "" for anonymous
 $nexusPassword  = ""    # leave empty string "" for anonymous
 
 $nexusMsiList = @(
@@ -592,7 +619,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Restart Windows Terminal + PowerShell to load:" -ForegroundColor Yellow
 Write-Host "  - Updated Terminal font defaults (FiraCode Nerd Font, size 9)" -ForegroundColor Yellow
-Write-Host "  - Updated All-Users profiles (Terminal-Icons, PSFzf, zoxide, starship, Testimo, ADS)" -ForegroundColor Yellow
+Write-Host "  - Updated All-Users profiles (Terminal-Icons, PSFzf, zoxide, starship)" -ForegroundColor Yellow
 Write-Host ""
 
 $reboot = Read-Host "Reboot now? (y/n)"
