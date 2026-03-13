@@ -174,92 +174,93 @@ function Install-MsiFromNexus {
 function Write-ElitePowerShellProfile {
     param([Parameter(Mandatory)][string]$ProfilePath)
 
-    $profileContent = @'
-# ============================================
-# Elite PowerShell Global Profile (ALL USERS)
-# ============================================
+    # Build profile as array of lines — avoids here-string issues when run via iex
+    $lines = @(
+        '# ============================================',
+        '# Elite PowerShell Global Profile (ALL USERS)',
+        '# ============================================',
+        '',
+        '# ---- Encoding ----',
+        'try {',
+        '    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+        '    $PSDefaultParameterValues[''Out-File:Encoding''] = ''utf8''',
+        '} catch {}',
+        '',
+        '# ---- ANSI rendering (PowerShell 7+) ----',
+        'try {',
+        '    if (Test-Path Variable:\PSStyle) {',
+        '        $PSStyle.OutputRendering = ''Ansi''',
+        '    }',
+        '} catch {}',
+        '',
+        '# ---- PSReadLine ----',
+        'if (Get-Module -ListAvailable -Name PSReadLine) {',
+        '    Import-Module PSReadLine -ErrorAction SilentlyContinue',
+        '    try {',
+        '        Set-PSReadLineOption -PredictionSource History',
+        '        Set-PSReadLineOption -PredictionViewStyle ListView',
+        '    } catch {}',
+        '    try {',
+        '        Set-PSReadLineOption -EditMode Windows',
+        '        Set-PSReadLineOption -BellStyle None',
+        '        Set-PSReadLineOption -HistoryNoDuplicates',
+        '        Set-PSReadLineOption -HistorySearchCursorMovesToEnd',
+        '        Set-PSReadLineOption -ShowToolTips',
+        '        Set-PSReadLineOption -ContinuationPrompt ''> ''',
+        '    } catch {}',
+        '    try {',
+        '        Set-PSReadLineKeyHandler -Key Tab -Function Complete',
+        '        Set-PSReadLineKeyHandler -Key UpArrow -Function HistorySearchBackward',
+        '        Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward',
+        '        Set-PSReadLineKeyHandler -Key Ctrl+LeftArrow -Function BackwardWord',
+        '        Set-PSReadLineKeyHandler -Key Ctrl+RightArrow -Function ForwardWord',
+        '        Set-PSReadLineKeyHandler -Key Alt+Backspace -Function BackwardKillWord',
+        '        Set-PSReadLineKeyHandler -Key Ctrl+Backspace -Function BackwardKillWord',
+        '    } catch {}',
+        '}',
+        '',
+        '# ---- Terminal-Icons ----',
+        'if (Get-Module -ListAvailable -Name Terminal-Icons) {',
+        '    Import-Module Terminal-Icons -ErrorAction SilentlyContinue',
+        '}',
+        '',
+        '# ---- PSFzf ----',
+        'if (Get-Module -ListAvailable -Name PSFzf) {',
+        '    Import-Module PSFzf -ErrorAction SilentlyContinue',
+        '    try { Set-PsFzfOption -PSReadlineChordProvider ''Ctrl+t'' -PSReadlineChordReverseHistory ''Ctrl+r'' | Out-Null } catch {}',
+        '    try { Enable-PsFzfAliases | Out-Null } catch {}',
+        '}',
+        '',
+        '# ---- zoxide ----',
+        'if (Get-Command zoxide -ErrorAction SilentlyContinue) {',
+        '    try { Invoke-Expression (& zoxide init powershell) } catch {}',
+        '}',
+        '',
+        '# ---- posh-git ----',
+        'if (Get-Module -ListAvailable -Name posh-git) {',
+        '    Import-Module posh-git -ErrorAction SilentlyContinue',
+        '}',
+        '',
+        '# ---- QoL aliases ----',
+        'function ll { Get-ChildItem -Force }',
+        'function la { Get-ChildItem -Force }',
+        'function .. { Set-Location .. }',
+        'function ... { Set-Location ../.. }',
+        '',
+        '# ---- Starship prompt ----',
+        'if (Get-Command starship -ErrorAction SilentlyContinue) {',
+        '    try { Invoke-Expression (& starship init powershell) } catch {}',
+        '}'
+    )
 
-# ---- Encoding ----
-try {
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-    $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
-} catch {}
-
-# ---- ANSI rendering (PowerShell 7+) ----
-try {
-    if (Test-Path Variable:\PSStyle) {
-        $PSStyle.OutputRendering = 'Ansi'
+    try {
+        $dir = Split-Path $ProfilePath -Parent
+        if ($dir -and !(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $lines | Set-Content -Path $ProfilePath -Encoding UTF8 -Force
+        Write-Ok "Wrote ALL-USERS profile -> $ProfilePath"
+    } catch {
+        Write-Warn "Failed writing profile to ${ProfilePath}: $($_.Exception.Message)"
     }
-} catch {}
-
-# ---- PSReadLine ----
-if (Get-Module -ListAvailable -Name PSReadLine) {
-    Import-Module PSReadLine -ErrorAction SilentlyContinue
-
-    try {
-        Set-PSReadLineOption -PredictionSource History
-        Set-PSReadLineOption -PredictionViewStyle ListView
-    } catch {}
-
-    try {
-        Set-PSReadLineOption -EditMode Windows
-        Set-PSReadLineOption -BellStyle None
-        Set-PSReadLineOption -HistoryNoDuplicates
-        Set-PSReadLineOption -HistorySearchCursorMovesToEnd
-        Set-PSReadLineOption -ShowToolTips
-        Set-PSReadLineOption -ContinuationPrompt '⟩ '
-    } catch {}
-
-    try {
-        Set-PSReadLineKeyHandler -Key Tab -Function Complete
-        Set-PSReadLineKeyHandler -Key UpArrow -Function HistorySearchBackward
-        Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
-        Set-PSReadLineKeyHandler -Key Ctrl+LeftArrow -Function BackwardWord
-        Set-PSReadLineKeyHandler -Key Ctrl+RightArrow -Function ForwardWord
-        Set-PSReadLineKeyHandler -Key Alt+Backspace -Function BackwardKillWord
-        Set-PSReadLineKeyHandler -Key Ctrl+Backspace -Function BackwardKillWord
-    } catch {}
-}
-
-# ---- Terminal-Icons ----
-if (Get-Module -ListAvailable -Name Terminal-Icons) {
-    Import-Module Terminal-Icons -ErrorAction SilentlyContinue
-}
-
-# ---- PSFzf (keybinds: Ctrl+R, Ctrl+T, Alt+C) ----
-if (Get-Module -ListAvailable -Name PSFzf) {
-    Import-Module PSFzf -ErrorAction SilentlyContinue
-    try { Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r' | Out-Null } catch {}
-    try { Enable-PsFzfAliases | Out-Null } catch {}
-}
-
-# ---- zoxide (smart jump) ----
-if (Get-Command zoxide -ErrorAction SilentlyContinue) {
-    try { Invoke-Expression (& zoxide init powershell) } catch {}
-}
-
-# ---- posh-git ----
-if (Get-Module -ListAvailable -Name posh-git) {
-    Import-Module posh-git -ErrorAction SilentlyContinue
-}
-
-# ---- QoL ----
-function ll { Get-ChildItem -Force }
-function la { Get-ChildItem -Force }
-function .. { Set-Location .. }
-function ... { Set-Location ../.. }
-
-# ---- Starship prompt ----
-if (Get-Command starship -ErrorAction SilentlyContinue) {
-    try { Invoke-Expression (& starship init powershell) } catch {}
-}
-'@
-
-    $dir = Split-Path $ProfilePath -Parent
-    if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-
-    Set-Content -Path $ProfilePath -Value $profileContent -Force -Encoding UTF8
-    Write-Ok "Wrote ALL-USERS profile -> $ProfilePath"
 }
 
 function Update-WindowsTerminalSettings {
@@ -466,27 +467,35 @@ $nexusBaseUrl   = "http://10.0.0.49:8081/repository/msi-packages"
 $nexusUser      = ""    # leave empty string "" for anonymous
 $nexusPassword  = ""    # leave empty string "" for anonymous
 
-# Map each MSI to its Add/Remove Programs display name for install-check
+# Each entry uses keyword fragments - ANY match = already installed
 $nexusMsiMap = @(
-    @{ File = "action1_agent(GurdipDevOps).msi"; DisplayName = "Action1 Agent" },
-    @{ File = "DevolutionsAgent-x86_64-2026.1.0.0.msi"; DisplayName = "Devolutions Agent" }
+    @{ File = "action1_agent(GurdipDevOps).msi";        Keywords = @("Action1") },
+    @{ File = "DevolutionsAgent-x86_64-2026.1.0.0.msi"; Keywords = @("Devolutions", "RDM", "Devolutions Agent") }
 )
 # -------------------------------------------------------------------
 
-# Check installed programs in both 32-bit and 64-bit registry hives
+# Collect all installed display names from 32-bit and 64-bit hives
 $installedPrograms = @(
     Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"             -ErrorAction SilentlyContinue
     Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
 ) | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName
 
+Write-Info "Installed programs found: $($installedPrograms.Count)"
+
 $msiToInstall = @()
 foreach ($entry in $nexusMsiMap) {
-    $alreadyInstalled = $installedPrograms | Where-Object { $_ -like "*$($entry.DisplayName)*" }
-    if ($alreadyInstalled) {
-        Write-Warn "Already installed, skipping: $($entry.DisplayName)"
-    } else {
-        Write-Info "Queued for install: $($entry.DisplayName)"
+    $found = $false
+    foreach ($keyword in $entry.Keywords) {
+        if ($installedPrograms | Where-Object { $_ -like "*$keyword*" }) {
+            Write-Warn "Already installed (matched: $keyword), skipping: $($entry.File)"
+            $found = $true
+            break
+        }
+    }
+    if (-not $found) {
+        Write-Info "Not installed, queued: $($entry.File)"
         $msiToInstall += $entry.File
+    }
     }
 }
 
