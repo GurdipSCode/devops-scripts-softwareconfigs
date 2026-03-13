@@ -7,7 +7,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
-# Global trap — catches any terminating error and prints it instead of silent exit
+# Global trap -- catches any terminating error and prints it instead of silent exit
 trap {
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Red
@@ -42,7 +42,7 @@ function Invoke-ScoopInstallSafe {
     } catch {
         $msg = $_.Exception.Message
         if ($msg -match "already installed" -or $msg -match "already exists") {
-            Write-Warn "Scoop: $PackageId already installed / file exists — continuing"
+            Write-Warn "Scoop: $PackageId already installed / file exists -- continuing"
             return
         }
         Write-Warn "Scoop install failed for ${PackageId}: $msg"
@@ -145,9 +145,9 @@ function Install-MsiFromNexus {
 
             switch ($proc.ExitCode) {
                 0    { Write-Ok   "[$msiName] Installed successfully" }
-                3010 { Write-Ok   "[$msiName] Installed — reboot required to complete" }
-                1638 { Write-Warn "[$msiName] Another version already installed — skipping" }
-                1641 { Write-Ok   "[$msiName] Installed — reboot initiated by installer" }
+                3010 { Write-Ok   "[$msiName] Installed -- reboot required to complete" }
+                1638 { Write-Warn "[$msiName] Another version already installed -- skipping" }
+                1641 { Write-Ok   "[$msiName] Installed -- reboot initiated by installer" }
                 default {
                     Write-Warn "[$msiName] Installer exited with code $($proc.ExitCode)"
                     $results.Failed += $msiName
@@ -165,7 +165,7 @@ function Install-MsiFromNexus {
 
     # Summary
     Write-Host ""
-    Write-Ok   "MSI installs complete — $($results.Success.Count) succeeded, $($results.Failed.Count) failed"
+    Write-Ok   "MSI installs complete -- $($results.Success.Count) succeeded, $($results.Failed.Count) failed"
     if ($results.Failed.Count -gt 0) {
         Write-Warn "Failed packages: $($results.Failed -join ', ')"
     }
@@ -174,7 +174,7 @@ function Install-MsiFromNexus {
 function Write-ElitePowerShellProfile {
     param([Parameter(Mandatory)][string]$ProfilePath)
 
-    # Build profile as array of lines — avoids here-string issues when run via iex
+    # Build profile as array of lines -- avoids here-string issues when run via iex
     $lines = @(
         '# ============================================',
         '# Elite PowerShell Global Profile (ALL USERS)',
@@ -270,7 +270,7 @@ function Update-WindowsTerminalSettings {
     )
 
     # Build candidate paths for ALL user profiles on the machine, not just the
-    # running admin — script runs as Administrator so $env:LOCALAPPDATA points
+    # running admin -- script runs as Administrator so $env:LOCALAPPDATA points
     # to the admin profile, missing any other logged-on users.
     $allLocalAppDatas = @()
 
@@ -412,7 +412,7 @@ foreach ($pkg in $scoopPkgs) { Invoke-ScoopInstallSafe -PackageId $pkg }
 # ============================================================================
 Write-Host "`n[4/14] Installing Python pip and Glances via pip..." -ForegroundColor Yellow
 
-# Resolve python executable — try py launcher, then python, then choco install paths
+# Resolve python executable -- try py launcher, then python, then choco install paths
 $pyExe = $null
 foreach ($candidate in @("py", "python")) {
     $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
@@ -451,7 +451,7 @@ if ($pyExe) {
         Write-Warn "Continuing..."
     }
 } else {
-    Write-Warn "Python not found after PATH refresh — skipping pip/glances install"
+    Write-Warn "Python not found after PATH refresh -- skipping pip/glances install"
     Write-Warn "Ensure python is installed and re-run, or install manually: py -m pip install glances"
 }
 
@@ -461,7 +461,7 @@ if ($pyExe) {
 Write-Host "`n[5/14] Installing MSI packages from Nexus..." -ForegroundColor Yellow
 
 # -------------------------------------------------------------------
-# CONFIG — update these to match your Nexus server and repo
+# CONFIG -- update these to match your Nexus server and repo
 # -------------------------------------------------------------------
 $nexusBaseUrl   = "http://10.0.0.49:8081/repository/msi-packages"
 $nexusUser      = ""    # leave empty string "" for anonymous
@@ -521,7 +521,7 @@ $winPSAllUsersProfile = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\p
 Write-ElitePowerShellProfile -ProfilePath $winPSAllUsersProfile
 
 # Resolve pwsh ALL USERS profile path without spawning a child process
-# Child pwsh via iex pipe can fail with StrictMode — use known paths instead
+# Child pwsh via iex pipe can fail with StrictMode -- use known paths instead
 $pwshAllUsersProfile = $null
 $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
 if ($pwshCmd -and $pwshCmd.Source) {
@@ -547,7 +547,7 @@ if ($pwshCmd -and $pwshCmd.Source) {
 if ($pwshAllUsersProfile) {
     Write-ElitePowerShellProfile -ProfilePath $pwshAllUsersProfile
 } else {
-    Write-Warn "pwsh not found or profile path unresolvable — skipping pwsh ALL USERS profile."
+    Write-Warn "pwsh not found or profile path unresolvable -- skipping pwsh ALL USERS profile."
 }
 
 Write-Host "`n  Detecting installed Nerd Font name..." -ForegroundColor Cyan
@@ -573,13 +573,13 @@ foreach ($regPath in $fontRegPaths) {
 }
 
 if (-not $nerdFontFace) {
-    Write-Warn "Could not detect Nerd Font in registry — defaulting to 'FiraCode NF'"
+    Write-Warn "Could not detect Nerd Font in registry -- defaulting to 'FiraCode NF'"
     $nerdFontFace = "FiraCode NF"
 }
 
 Write-Ok "Using font face: $nerdFontFace"
 
-# Kill Windows Terminal before writing — if WT is open it overwrites settings.json on exit
+# Kill Windows Terminal before writing -- if WT is open it overwrites settings.json on exit
 Write-Host "`n  Stopping Windows Terminal so settings are not overwritten on exit..." -ForegroundColor Cyan
 foreach ($procName in @("WindowsTerminal", "wt")) {
     $procs = Get-Process -Name $procName -ErrorAction SilentlyContinue
