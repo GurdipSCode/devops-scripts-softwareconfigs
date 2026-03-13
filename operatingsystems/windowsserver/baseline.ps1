@@ -466,17 +466,39 @@ $nexusBaseUrl   = "http://10.0.0.49:8081/repository/msi-packages"
 $nexusUser      = ""    # leave empty string "" for anonymous
 $nexusPassword  = ""    # leave empty string "" for anonymous
 
-$nexusMsiList = @(
-    "action1_agent(GurdipDevOps).msi"
-    "DevolutionsAgent-x86_64-2026.1.0.0.msi"
+# Map each MSI to its Add/Remove Programs display name for install-check
+$nexusMsiMap = @(
+    @{ File = "action1_agent(GurdipDevOps).msi"; DisplayName = "Action1 Agent" },
+    @{ File = "DevolutionsAgent-x86_64-2026.1.0.0.msi"; DisplayName = "Devolutions Agent" }
 )
 # -------------------------------------------------------------------
 
-Install-MsiFromNexus `
-    -NexusBaseUrl   $nexusBaseUrl `
-    -MsiNames       $nexusMsiList `
-    -NexusUser      $nexusUser `
-    -NexusPassword  $nexusPassword
+# Check installed programs in both 32-bit and 64-bit registry hives
+$installedPrograms = @(
+    Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"             -ErrorAction SilentlyContinue
+    Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
+) | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName
+
+$msiToInstall = @()
+foreach ($entry in $nexusMsiMap) {
+    $alreadyInstalled = $installedPrograms | Where-Object { $_ -like "*$($entry.DisplayName)*" }
+    if ($alreadyInstalled) {
+        Write-Warn "Already installed, skipping: $($entry.DisplayName)"
+    } else {
+        Write-Info "Queued for install: $($entry.DisplayName)"
+        $msiToInstall += $entry.File
+    }
+}
+
+if ($msiToInstall.Count -gt 0) {
+    Install-MsiFromNexus `
+        -NexusBaseUrl   $nexusBaseUrl `
+        -MsiNames       $msiToInstall `
+        -NexusUser      $nexusUser `
+        -NexusPassword  $nexusPassword
+} else {
+    Write-Ok "All MSI packages already installed - skipping Nexus downloads"
+}
 
 # ============================================================================
 # SECTION 6: ELITE POWERSHELL PROFILE (ALL USERS) + MODULES + TERMINAL FONT
@@ -490,16 +512,34 @@ Install-PSModuleSafe -Name "Terminal-Icons"
 $winPSAllUsersProfile = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\profile.ps1'
 Write-ElitePowerShellProfile -ProfilePath $winPSAllUsersProfile
 
+# Resolve pwsh ALL USERS profile path without spawning a child process
+# Child pwsh via iex pipe can fail with StrictMode — use known paths instead
+$pwshAllUsersProfile = $null
 $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
-if ($pwshCmd) {
-    $pwshAllUsersProfile = & pwsh -NoProfile -Command '$PROFILE.AllUsersAllHosts'
-    if ($pwshAllUsersProfile) {
-        Write-ElitePowerShellProfile -ProfilePath $pwshAllUsersProfile
-    } else {
-        Write-Warn "Could not determine pwsh AllUsersAllHosts profile path."
+if ($pwshCmd -and $pwshCmd.Source) {
+    try {
+        # Try known PS7 all-users profile locations directly
+        $pwshDir = Split-Path $pwshCmd.Source -Parent
+        $candidates = @(
+            (Join-Path $pwshDir 'profile.ps1'),
+            'C:\Program Files\PowerShell\profile.ps1',
+            'C:\Program Files\PowerShell-preview\profile.ps1'
+        )
+        foreach ($c in $candidates) {
+            if ($c -and (Split-Path $c -Parent | Test-Path)) {
+                $pwshAllUsersProfile = $c
+                break
+            }
+        }
+    } catch {
+        Write-Warn "Could not resolve pwsh profile path: $($_.Exception.Message)"
     }
+}
+
+if ($pwshAllUsersProfile) {
+    Write-ElitePowerShellProfile -ProfilePath $pwshAllUsersProfile
 } else {
-    Write-Warn "pwsh not found; skipping pwsh ALL USERS profile update."
+    Write-Warn "pwsh not found or profile path unresolvable — skipping pwsh ALL USERS profile."
 }
 
 Write-Host "`n  Detecting installed Nerd Font name..." -ForegroundColor Cyan
