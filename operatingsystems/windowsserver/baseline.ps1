@@ -5,7 +5,7 @@
 # ============================================================================
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 function Write-Info { param([string]$m) Write-Host "  $m" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$m) Write-Host "  $m" -ForegroundColor Green }
@@ -329,6 +329,9 @@ Write-Bad "WARNING: This script applies significant changes."
 Write-Bad "Windows Firewall will be DISABLED (per your request)."
 Write-Host ""
 Read-Host "Press Enter to continue or Ctrl+C to abort"
+
+try {
+
 
 # ============================================================================
 # SECTION 1: PACKAGE MANAGERS
@@ -684,4 +687,16 @@ $reboot = Read-Host "Reboot now? (y/n)"
 if ($reboot -eq 'y') {
     Write-Bad "Rebooting in 10 seconds..."
     shutdown /r /t 10 /c "Server hardening complete - rebooting"
+}
+
+} catch {
+    Write-Host ""`n" -ForegroundColor Red
+    Write-Host "============================================" -ForegroundColor Red
+    Write-Host " SCRIPT ERROR - See details below:" -ForegroundColor Red
+    Write-Host "============================================" -ForegroundColor Red
+    Write-Host "  Error: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  Line:  $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
+    Write-Host "  In:    $($_.InvocationInfo.Line.Trim())" -ForegroundColor Red
+    Write-Host "" -ForegroundColor Red
+    Read-Host "Press Enter to exit"
 }
