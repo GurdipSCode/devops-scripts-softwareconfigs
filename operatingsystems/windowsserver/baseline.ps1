@@ -7,6 +7,19 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
+# Global trap — catches any terminating error and prints it instead of silent exit
+trap {
+    Write-Host ""
+    Write-Host "============================================" -ForegroundColor Red
+    Write-Host " SCRIPT ERROR" -ForegroundColor Red
+    Write-Host "============================================" -ForegroundColor Red
+    Write-Host "  Error : $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  Line  : $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
+    Write-Host "  Cmd   : $($_.InvocationInfo.Line.Trim())" -ForegroundColor Red
+    Write-Host ""
+    continue
+}
+
 function Write-Info { param([string]$m) Write-Host "  $m" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$m) Write-Host "  $m" -ForegroundColor Green }
 function Write-Warn { param([string]$m) Write-Host "  $m" -ForegroundColor Yellow }
@@ -329,9 +342,6 @@ Write-Bad "WARNING: This script applies significant changes."
 Write-Bad "Windows Firewall will be DISABLED (per your request)."
 Write-Host ""
 Read-Host "Press Enter to continue or Ctrl+C to abort"
-
-try {
-
 
 # ============================================================================
 # SECTION 1: PACKAGE MANAGERS
@@ -687,16 +697,4 @@ $reboot = Read-Host "Reboot now? (y/n)"
 if ($reboot -eq 'y') {
     Write-Bad "Rebooting in 10 seconds..."
     shutdown /r /t 10 /c "Server hardening complete - rebooting"
-}
-
-} catch {
-    Write-Host ""
-    Write-Host "============================================" -ForegroundColor Red
-    Write-Host " SCRIPT ERROR - See details below:" -ForegroundColor Red
-    Write-Host "============================================" -ForegroundColor Red
-    Write-Host "  Error: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "  Line:  $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
-    Write-Host "  In:    $($_.InvocationInfo.Line.Trim())" -ForegroundColor Red
-    Write-Host ""
-    Read-Host "Press Enter to exit"
 }
