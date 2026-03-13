@@ -690,13 +690,13 @@ if ($reboot -eq 'y') {
 }
 
 } catch {
-    Write-Host ""`n" -ForegroundColor Red
+    Write-Host ""
     Write-Host "============================================" -ForegroundColor Red
     Write-Host " SCRIPT ERROR - See details below:" -ForegroundColor Red
     Write-Host "============================================" -ForegroundColor Red
     Write-Host "  Error: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "  Line:  $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
     Write-Host "  In:    $($_.InvocationInfo.Line.Trim())" -ForegroundColor Red
-    Write-Host "" -ForegroundColor Red
+    Write-Host ""
     Read-Host "Press Enter to exit"
 }
