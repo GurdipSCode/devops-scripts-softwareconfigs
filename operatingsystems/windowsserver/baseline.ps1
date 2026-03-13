@@ -496,7 +496,6 @@ foreach ($entry in $nexusMsiMap) {
         Write-Info "Not installed, queued: $($entry.File)"
         $msiToInstall += $entry.File
     }
-    }
 }
 
 if ($msiToInstall.Count -gt 0) {
