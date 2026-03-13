@@ -559,75 +559,15 @@ if ($pwshAllUsersProfile) {
     Write-Warn "pwsh not found or profile path unresolvable -- skipping pwsh ALL USERS profile."
 }
 
-Write-Host "`n  Detecting installed Nerd Font name..." -ForegroundColor Cyan
-
-$nerdFontFace = $null
-$fontSearchNames = @("FiraCode NF", "FiraCode Nerd Font Mono", "FiraCode Nerd Font", "CaskaydiaCove NF", "CaskaydiaCove Nerd Font Mono")
-$fontRegPaths = @(
-    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts",
-    "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
-)
-foreach ($regPath in $fontRegPaths) {
-    if ($nerdFontFace) { break }
-    $registeredFonts = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
-    if ($registeredFonts) {
-        foreach ($candidate in $fontSearchNames) {
-            $match = $registeredFonts.PSObject.Properties | Where-Object { $_.Name -like "*$candidate*" }
-            if ($match) {
-                $nerdFontFace = $candidate
-                break
-            }
-        }
-    }
+Write-Host "`n  Setting Windows Terminal font via external script..." -ForegroundColor Cyan
+try {
+    $fontScript = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/GurdipSCode/devops-scripts-softwareconfigs/refs/heads/main/operatingsystems/windowsserver/set-windows-terminal-font.ps1" -UseBasicParsing
+    Invoke-Expression $fontScript
+    Write-Ok "Font script completed"
+} catch {
+    Write-Warn "Font script failed: $($_.Exception.Message)"
 }
 
-if (-not $nerdFontFace) {
-    Write-Warn "Could not detect Nerd Font in registry -- defaulting to 'FiraCode NF'"
-    $nerdFontFace = "FiraCode NF"
-}
-
-Write-Ok "Using font face: $nerdFontFace"
-
-# Kill Windows Terminal before writing -- if WT is open it overwrites settings.json on exit
-Write-Host "`n  Stopping Windows Terminal so settings are not overwritten on exit..." -ForegroundColor Cyan
-foreach ($procName in @("WindowsTerminal", "wt")) {
-    $procs = Get-Process -Name $procName -ErrorAction SilentlyContinue
-    if ($procs) {
-        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
-        Write-Warn "Stopped process: $procName"
-    }
-}
-Start-Sleep -Seconds 2
-
-Write-Host "`n  Configuring Windows Terminal defaults to Nerd Font + size 9..." -ForegroundColor Cyan
-Update-WindowsTerminalSettings -FontFace $nerdFontFace -FontSize 9
-
-# Verify the write took effect
-Write-Host "`n  Verifying font was written correctly..." -ForegroundColor Cyan
-$verifyPaths = @([string]$env:LOCALAPPDATA)
-$profileListItems = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*" -ErrorAction SilentlyContinue
-foreach ($prof in $profileListItems) {
-    if ($prof.ProfileImagePath -and (Test-Path $prof.ProfileImagePath)) {
-        $verifyPaths += Join-Path $prof.ProfileImagePath "AppData\Local"
-    }
-}
-foreach ($localAppData in $verifyPaths) {
-    $verifyCandidates = @(
-        "$localAppData\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
-        "$localAppData\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
-        "$localAppData\Microsoft\Windows Terminal\settings.json"
-    )
-    foreach ($vPath in ($verifyCandidates | Where-Object { Test-Path $_ })) {
-        try {
-            $vData = Get-Content $vPath -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
-            $vFace = $vData.profiles.defaults.font.face
-            if ($vFace) { Write-Ok "  VERIFIED font='$vFace' in $vPath" }
-            else        { Write-Warn "  Font NOT found in $vPath" }
-        } catch { Write-Warn "  Could not verify $vPath" }
-    }
-}
-
-# ============================================================================
 # SECTION 7: PERFORMANCE OPTIMIZATIONS
 # ============================================================================
 Write-Host "`n[7/14] Applying Performance Optimizations..." -ForegroundColor Yellow
