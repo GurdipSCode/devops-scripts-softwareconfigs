@@ -530,8 +530,8 @@ if ($pwshCmd -and $pwshCmd.Source) {
         $pwshDir = Split-Path $pwshCmd.Source -Parent
         $candidates = @(
             (Join-Path $pwshDir 'profile.ps1'),
-            'C:\Program Files\PowerShell\profile.ps1',
-            'C:\Program Files\PowerShell-preview\profile.ps1'
+            'C:\Program Files\PowerShell\7\profile.ps1',
+            'C:\Program Files\PowerShell\7-preview\profile.ps1'
         )
         foreach ($c in $candidates) {
             if ($c -and (Split-Path $c -Parent | Test-Path)) {
