@@ -475,10 +475,19 @@ $nexusMsiMap = @(
 # -------------------------------------------------------------------
 
 # Collect all installed display names from 32-bit and 64-bit hives
-$installedPrograms = @(
-    Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"             -ErrorAction SilentlyContinue
-    Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
-) | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName
+# Collect installed display names — use explicit property access to avoid StrictMode errors
+$installedPrograms = @()
+$regHives = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
+foreach ($hive in $regHives) {
+    $entries = Get-ItemProperty $hive -ErrorAction SilentlyContinue
+    foreach ($entry in $entries) {
+        $dn = $entry.PSObject.Properties["DisplayName"]
+        if ($dn -and $dn.Value) { $installedPrograms += $dn.Value }
+    }
+}
 
 Write-Info "Installed programs found: $($installedPrograms.Count)"
 
