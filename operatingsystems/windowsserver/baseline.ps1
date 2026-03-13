@@ -255,44 +255,65 @@ function Update-WindowsTerminalSettings {
         [Parameter(Mandatory)][int]$FontSize
     )
 
-    $local = [string]$env:LOCALAPPDATA
-    $candidates = @(
-        "$local\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
-        "$local\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
-        "$local\Microsoft\Windows Terminal\settings.json"
-    )
+    # Build candidate paths for ALL user profiles on the machine, not just the
+    # running admin — script runs as Administrator so $env:LOCALAPPDATA points
+    # to the admin profile, missing any other logged-on users.
+    $allLocalAppDatas = @()
 
-    $targets = @($candidates | Where-Object { Test-Path $_ })
-    if (-not $targets -or $targets.Count -eq 0) {
-        Write-Warn "Windows Terminal settings.json not found for this user. Skipping font config."
-        Write-Warn "Open Windows Terminal once, then re-run this script as that user."
-        return
+    # Add current session's LOCALAPPDATA first
+    $allLocalAppDatas += [string]$env:LOCALAPPDATA
+
+    # Enumerate all user profile directories from the registry
+    $profileList = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*" -ErrorAction SilentlyContinue
+    foreach ($prof in $profileList) {
+        $profilePath = $prof.ProfileImagePath
+        if ($profilePath -and (Test-Path $profilePath)) {
+            $localAppData = Join-Path $profilePath "AppData\Local"
+            if ($allLocalAppDatas -notcontains $localAppData) {
+                $allLocalAppDatas += $localAppData
+            }
+        }
     }
 
-    foreach ($path in $targets) {
-        try {
-            Write-Info "Updating Windows Terminal settings: $path"
-            $raw = Get-Content -Path $path -Raw -ErrorAction Stop
-            if ([string]::IsNullOrWhiteSpace($raw)) { throw "settings.json is empty" }
+    $updated = 0
+    foreach ($localAppData in $allLocalAppDatas) {
+        $candidates = @(
+            "$localAppData\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
+            "$localAppData\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
+            "$localAppData\Microsoft\Windows Terminal\settings.json"
+        )
 
-            # ConvertFrom-Json produces read-only PSCustomObjects in older PS versions
-            # Round-trip through hashtable via JSON to get fully mutable objects
-            $data = $raw | ConvertFrom-Json -ErrorAction Stop | ConvertTo-Json -Depth 60 | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        foreach ($settingsPath in ($candidates | Where-Object { Test-Path $_ })) {
+            try {
+                Write-Info "Updating Windows Terminal settings: $settingsPath"
+                $raw = Get-Content -Path $settingsPath -Raw -ErrorAction Stop
+                if ([string]::IsNullOrWhiteSpace($raw)) { throw "settings.json is empty" }
 
-            if (-not $data.ContainsKey('profiles'))                     { $data['profiles'] = @{} }
-            if (-not $data['profiles'].ContainsKey('defaults'))         { $data['profiles']['defaults'] = @{} }
-            if (-not $data['profiles']['defaults'].ContainsKey('font')) { $data['profiles']['defaults']['font'] = @{} }
+                # Round-trip through hashtable to get fully mutable objects
+                $data = $raw | ConvertFrom-Json -ErrorAction Stop | ConvertTo-Json -Depth 60 | ConvertFrom-Json -AsHashtable -ErrorAction Stop
 
-            $data['profiles']['defaults']['font']['face'] = $FontFace
-            $data['profiles']['defaults']['font']['size'] = $FontSize
+                if (-not $data.ContainsKey('profiles'))                     { $data['profiles'] = @{} }
+                if (-not $data['profiles'].ContainsKey('defaults'))         { $data['profiles']['defaults'] = @{} }
+                if (-not $data['profiles']['defaults'].ContainsKey('font')) { $data['profiles']['defaults']['font'] = @{} }
 
-            $out = $data | ConvertTo-Json -Depth 60
-            Set-Content -Path $path -Value $out -Encoding UTF8 -Force
+                $data['profiles']['defaults']['font']['face'] = $FontFace
+                $data['profiles']['defaults']['font']['size'] = $FontSize
 
-            Write-Ok "Terminal defaults set: font='$FontFace' size=$FontSize"
-        } catch {
-            Write-Warn "Failed updating '$path': $($_.Exception.Message)"
+                $data | ConvertTo-Json -Depth 60 | Set-Content -Path $settingsPath -Encoding UTF8 -Force
+
+                Write-Ok "Terminal font set: '$FontFace' size=$FontSize -> $settingsPath"
+                $updated++
+            } catch {
+                Write-Warn "Failed updating '${settingsPath}': $($_.Exception.Message)"
+            }
         }
+    }
+
+    if ($updated -eq 0) {
+        Write-Warn "No Windows Terminal settings.json found across any user profile."
+        Write-Warn "Open Windows Terminal once as each user, then re-run the script."
+    } else {
+        Write-Ok "Updated $updated settings.json file(s)"
     }
 }
 
@@ -336,7 +357,7 @@ try { scoop bucket add extras | Out-Null } catch {}
 Write-Host "`n[2/14] Installing Chocolatey Packages..." -ForegroundColor Yellow
 
 $chocoPkgs = @(
-    "git","notepadplusplus","sysinternals","python","pwsh","osquery","poshgit",
+    "git","notepadplusplus","sysinternals","python","pwsh","osquery","poshgit","winmtr",
     "pingplotter","cnspec","cnquery","cloudbaseinit",
     "terminal-icons.powershell","fzf","zoxide","microsoft-windows-terminal","nerd-fonts-firacode",
     "nerd-fonts-cascadiacode"
@@ -496,8 +517,45 @@ if (-not $nerdFontFace) {
 }
 
 Write-Ok "Using font face: $nerdFontFace"
+
+# Kill Windows Terminal before writing — if WT is open it overwrites settings.json on exit
+Write-Host "`n  Stopping Windows Terminal so settings are not overwritten on exit..." -ForegroundColor Cyan
+foreach ($procName in @("WindowsTerminal", "wt")) {
+    $procs = Get-Process -Name $procName -ErrorAction SilentlyContinue
+    if ($procs) {
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        Write-Warn "Stopped process: $procName"
+    }
+}
+Start-Sleep -Seconds 2
+
 Write-Host "`n  Configuring Windows Terminal defaults to Nerd Font + size 9..." -ForegroundColor Cyan
 Update-WindowsTerminalSettings -FontFace $nerdFontFace -FontSize 9
+
+# Verify the write took effect
+Write-Host "`n  Verifying font was written correctly..." -ForegroundColor Cyan
+$verifyPaths = @([string]$env:LOCALAPPDATA)
+$profileListItems = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*" -ErrorAction SilentlyContinue
+foreach ($prof in $profileListItems) {
+    if ($prof.ProfileImagePath -and (Test-Path $prof.ProfileImagePath)) {
+        $verifyPaths += Join-Path $prof.ProfileImagePath "AppData\Local"
+    }
+}
+foreach ($localAppData in $verifyPaths) {
+    $verifyCandidates = @(
+        "$localAppData\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
+        "$localAppData\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
+        "$localAppData\Microsoft\Windows Terminal\settings.json"
+    )
+    foreach ($vPath in ($verifyCandidates | Where-Object { Test-Path $_ })) {
+        try {
+            $vData = Get-Content $vPath -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
+            $vFace = $vData.profiles.defaults.font.face
+            if ($vFace) { Write-Ok "  VERIFIED font='$vFace' in $vPath" }
+            else        { Write-Warn "  Font NOT found in $vPath" }
+        } catch { Write-Warn "  Could not verify $vPath" }
+    }
+}
 
 # ============================================================================
 # SECTION 7: PERFORMANCE OPTIMIZATIONS
