@@ -1,0 +1,74 @@
+format = """
+[](fg:#1a1b26)\
+$os\
+$username\
+$hostname\
+[](bg:#16213e fg:#1a1b26)\
+$directory\
+[](bg:#0f3460 fg:#16213e)\
+$git_branch\
+$git_status\
+[](bg:#e94560 fg:#0f3460)\
+$memory_usage\
+$cmd_duration\
+[](fg:#e94560)\
+$line_break\
+$character"""
+
+[os]
+disabled = false
+style = "bg:#1a1b26 fg:#7aa2f7"
+
+[username]
+show_always = true
+style_user = "bg:#1a1b26 fg:#7aa2f7 bold"
+style_root = "bg:#1a1b26 fg:#f7768e bold"
+format = "[ $user ]($style)"
+
+[hostname]
+ssh_only = false
+style = "bg:#1a1b26 fg:#7aa2f7"
+format = "[@$hostname ]($style)"
+
+[directory]
+style = "bg:#16213e fg:#7dcfff bold"
+format = "[ 󰉋 $path ]($style)"
+truncation_length = 3
+truncate_to_repo = true
+
+[git_branch]
+symbol = " "
+style = "bg:#0f3460 fg:#9ece6a bold"
+format = "[ $symbol$branch ]($style)"
+
+[git_status]
+style = "bg:#0f3460 fg:#f7768e bold"
+format = "[$all_status$ahead_behind ]($style)"
+conflicted = "⚡"
+ahead = "⇡${count}"
+behind = "⇣${count}"
+diverged = "⇕⇡${ahead_count}⇣${behind_count}"
+untracked = "?${count}"
+stashed = "󰏗 "
+modified = "!${count}"
+staged = "+${count}"
+deleted = "✘${count}"
+
+[memory_usage]
+disabled = false
+threshold = 0
+symbol = "󰍛 "
+style = "bg:#e94560 fg:#1a1b26 bold"
+format = "[ $symbol${ram} ]($style)"
+
+[cmd_duration]
+min_time = 500
+style = "bg:#e94560 fg:#1a1b26 bold"
+format = "[ 󱎫 $duration ]($style)"
+
+[character]
+success_symbol = "[❯](bold green)"
+error_symbol = "[❯](bold red)"
+
+[line_break]
+disabled = false
