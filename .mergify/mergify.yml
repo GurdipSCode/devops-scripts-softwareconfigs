@@ -1,1 +1,118 @@
+queue_rules:
+  - name: default
+    batch_size: 1
+    merge_conditions:
+      - check-success = GitGuardian
+      - check-success ~= ^buildkite/
+      - "#approved-reviews-by >= 1"
+      - -conflict
+      - -draft
+      - -label = do-not-merge
+      - -label = security-risk
+      - -label = breaking-change
+    queue_conditions:
+      - check-success = GitGuardian
+      - check-success ~= ^buildkite/
+      - "#approved-reviews-by >= 1"
+      - -conflict
+      - -draft
+      - -label = do-not-merge
+      - -label = security-risk
+      - -label = breaking-change
 
+pull_request_rules:
+  - name: add waiting label when PR is draft
+    conditions:
+      - draft
+    actions:
+      label:
+        add:
+          - wip
+
+  - name: remove wip label when ready
+    conditions:
+      - -draft
+    actions:
+      label:
+        remove:
+          - wip
+
+  - name: label powerShell changes
+    conditions:
+      - files ~= \.ps1$
+        or:
+          - files ~= \.psm1$
+    actions:
+      label:
+        add:
+          - powershell
+
+  - name: label bash changes
+    conditions:
+      - files ~= \.sh$
+        or:
+          - files ~= \.bash$
+    actions:
+      label:
+        add:
+          - bash
+
+  - name: label buildkite changes
+    conditions:
+      - files ~= ^\.buildkite/
+    actions:
+      label:
+        add:
+          - buildkite
+
+  - name: label security-sensitive changes
+    conditions:
+      - or:
+          - files ~= \.ps1$
+          - files ~= \.psm1$
+          - files ~= \.sh$
+          - files ~= \.bash$
+          - files ~= ^\.buildkite/
+          - files ~= Dockerfile$
+    actions:
+      label:
+        add:
+          - security-review
+
+  - name: request changes should block merge
+    conditions:
+      - "#changes-requested-reviews-by > 0"
+    actions:
+      label:
+        add:
+          - do-not-merge
+
+  - name: remove do-not-merge when no change requests remain
+    conditions:
+      - "#changes-requested-reviews-by = 0"
+    actions:
+      label:
+        remove:
+          - do-not-merge
+
+  - name: queue PR for merge when approved and checks pass
+    conditions:
+      - base = main
+      - -draft
+      - -conflict
+      - check-success = GitGuardian
+      - check-success ~= ^buildkite/
+      - "#approved-reviews-by >= 1"
+      - -label = do-not-merge
+      - -label = security-risk
+      - -label = breaking-change
+    actions:
+      queue:
+        name: default
+        method: squash
+
+  - name: delete branch after merge
+    conditions:
+      - merged
+    actions:
+      delete_head_branch: {}
