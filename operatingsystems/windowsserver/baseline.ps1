@@ -84,17 +84,91 @@ function Install-PSModuleSafe {
 }
 
 # ============================================================================
+# Write-BtopConfig
+# Writes a minimal btop.conf for every user account on the machine.
+# Skips any user whose config file already exists (never overwrites).
+# btop on Windows (Scoop) reads config from:
+#   %APPDATA%\btop\btop.conf  ->  <profile>\AppData\Roaming\btop\btop.conf
+# ============================================================================
+function Write-BtopConfig {
+    param(
+        [string] $ColorTheme     = "Default",
+        [int]    $UpdateMs       = 500
+    )
+
+    $configLines = @(
+        '#',
+        '# btop.conf -- minimal config written by server setup script',
+        '#',
+        '',
+        '# Color theme. "Default" uses the built-in btop theme.',
+        "color_theme = `"$ColorTheme`"",
+        '',
+        '# Update interval in milliseconds.',
+        "update_ms = $UpdateMs",
+        '',
+        '# Use UTF-8 box-drawing characters (requires a Nerd Font / Unicode terminal).',
+        'utf_force = True',
+        '',
+        '# Show detailed CPU frequency information.',
+        'show_cpu_freq = True',
+        '',
+        '# Clock format string (strftime). Empty = no clock.',
+        'clock_format = "%X"',
+        '',
+        '# Smooth CPU graph.',
+        'cpu_graph_upper = "total"',
+        'cpu_graph_lower = "user"',
+        '',
+        '# Memory display unit: "b" | "kb" | "mb" | "gb".',
+        'mem_graphs = True',
+        '',
+        '# Show processes as a tree.',
+        'proc_tree = False'
+    )
+
+    $allProfiles = Get-AllUserProfilePaths
+
+    # Also cover the currently running admin session
+    if ($env:APPDATA) {
+        $adminRoaming = $env:APPDATA
+        $adminBtop    = Join-Path $adminRoaming "btop\btop.conf"
+        if (!(Test-Path $adminBtop)) {
+            try {
+                $dir = Split-Path $adminBtop -Parent
+                if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+                $configLines | Set-Content -Path $adminBtop -Encoding UTF8 -Force
+                Write-Ok "Created btop.conf (current session): $adminBtop"
+            } catch {
+                Write-Warn "Failed writing btop.conf for current session: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Info "btop.conf already exists (current session) -- skipping: $adminBtop"
+        }
+    }
+
+    foreach ($profileRoot in $allProfiles) {
+        $roaming  = Join-Path $profileRoot "AppData\Roaming"
+        $confPath = Join-Path $roaming "btop\btop.conf"
+
+        if (Test-Path $confPath) {
+            Write-Info "btop.conf already exists -- skipping: $confPath"
+            continue
+        }
+
+        try {
+            $dir = Split-Path $confPath -Parent
+            if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $configLines | Set-Content -Path $confPath -Encoding UTF8 -Force
+            Write-Ok "Created btop.conf: $confPath"
+        } catch {
+            Write-Warn "Failed writing btop.conf to '${confPath}': $($_.Exception.Message)"
+        }
+    }
+}
+
+# ============================================================================
 # Install-MsiFromNexus
-# Downloads a list of MSI filenames from a Nexus raw repo and installs them.
-#
-# Parameters:
-#   -NexusBaseUrl   : Base URL of the Nexus raw repo, no trailing slash
-#                     e.g. "http://nexus:8081/repository/msi-packages"
-#   -MsiNames       : Array of MSI filenames (just the filename, no path)
-#                     e.g. @("Action1.msi", "MyApp-1.0.0.msi")
-#   -InstallArgs    : msiexec arguments (default: /qn /norestart)
-#   -NexusUser      : Optional Nexus username (if auth required)
-#   -NexusPassword  : Optional Nexus password (if auth required)
 # ============================================================================
 function Install-MsiFromNexus {
     param(
@@ -105,7 +179,6 @@ function Install-MsiFromNexus {
         [string] $NexusPassword = ""
     )
 
-    # Build auth header once if credentials supplied
     $headers = @{}
     if ($NexusUser -and $NexusPassword) {
         $encoded = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${NexusUser}:${NexusPassword}"))
@@ -163,7 +236,6 @@ function Install-MsiFromNexus {
         }
     }
 
-    # Summary
     Write-Host ""
     Write-Ok   "MSI installs complete -- $($results.Success.Count) succeeded, $($results.Failed.Count) failed"
     if ($results.Failed.Count -gt 0) {
@@ -171,10 +243,13 @@ function Install-MsiFromNexus {
     }
 }
 
+# ============================================================================
+# Write-ElitePowerShellProfile
+# Writes the elite profile to a given path (AllUsers or per-user).
+# ============================================================================
 function Write-ElitePowerShellProfile {
     param([Parameter(Mandatory)][string]$ProfilePath)
 
-    # Build profile as array of lines -- avoids here-string issues when run via iex
     $lines = @(
         '# ============================================',
         '# Elite PowerShell Global Profile (ALL USERS)',
@@ -257,78 +332,207 @@ function Write-ElitePowerShellProfile {
         $dir = Split-Path $ProfilePath -Parent
         if ($dir -and !(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         $lines | Set-Content -Path $ProfilePath -Encoding UTF8 -Force
-        Write-Ok "Wrote ALL-USERS profile -> $ProfilePath"
+        Write-Ok "Wrote profile -> $ProfilePath"
     } catch {
         Write-Warn "Failed writing profile to ${ProfilePath}: $($_.Exception.Message)"
     }
 }
 
+# ============================================================================
+# Get-AllUserProfilePaths
+# Returns a list of all local user profile root directories found in the
+# registry, deduped and validated to exist on disk.
+# ============================================================================
+function Get-AllUserProfilePaths {
+    $paths = @()
+
+    $profileList = Get-ItemProperty `
+        "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*" `
+        -ErrorAction SilentlyContinue
+
+    foreach ($prof in $profileList) {
+        $p = $prof.ProfileImagePath
+        # Skip system pseudo-profiles (LocalService, NetworkService, systemprofile)
+        if ($p -and (Test-Path $p) -and ($p -notmatch "systemprofile|LocalService|NetworkService")) {
+            if ($paths -notcontains $p) { $paths += $p }
+        }
+    }
+
+    return $paths
+}
+
+# ============================================================================
+# Update-WindowsTerminalSettings
+# Writes a complete, valid settings.json for EVERY user profile on the machine.
+# Creates the file (and its parent LocalState directory) from scratch if it
+# does not yet exist -- no need for the user to have opened Terminal first.
+# ============================================================================
 function Update-WindowsTerminalSettings {
     param(
         [Parameter(Mandatory)][string]$FontFace,
         [Parameter(Mandatory)][int]$FontSize
     )
 
-    # Build candidate paths for ALL user profiles on the machine, not just the
-    # running admin -- script runs as Administrator so $env:LOCALAPPDATA points
-    # to the admin profile, missing any other logged-on users.
-    $allLocalAppDatas = @()
-
-    # Add current session's LOCALAPPDATA first
-    $allLocalAppDatas += [string]$env:LOCALAPPDATA
-
-    # Enumerate all user profile directories from the registry
-    $profileList = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*" -ErrorAction SilentlyContinue
-    foreach ($prof in $profileList) {
-        $profilePath = $prof.ProfileImagePath
-        if ($profilePath -and (Test-Path $profilePath)) {
-            $localAppData = Join-Path $profilePath "AppData\Local"
-            if ($allLocalAppDatas -notcontains $localAppData) {
-                $allLocalAppDatas += $localAppData
+    # Canonical default settings.json -- matches what Windows Terminal 1.x writes
+    # on first launch, with our font baked in.  Extend the profiles/schemes arrays
+    # here if you need extra shells or colour schemes in future.
+    $defaultSettings = [ordered]@{
+        '$schema'          = "https://aka.ms/terminal-profiles-schema"
+        defaultProfile     = "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}"  # Windows PowerShell
+        copyOnSelect       = $false
+        copyFormatting     = $false
+        alwaysShowTabs     = $true
+        showTerminalTitleInTitlebar = $true
+        launchMode         = "default"
+        wordDelimiters     = " /\()""'-.,:;<>~!@#$%^&*|+=[]{}~?│"
+        confirmCloseAllTabs = $true
+        theme              = "dark"
+        profiles           = [ordered]@{
+            defaults = [ordered]@{
+                font        = [ordered]@{ face = $FontFace; size = $FontSize }
+                colorScheme = "Campbell"
+                cursorShape = "bar"
+                antialiasingMode = "grayscale"
+                useAcrylic  = $false
+                scrollbarState = "visible"
+                padding     = "8, 8, 8, 8"
             }
+            list = @(
+                [ordered]@{
+                    guid    = "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}"
+                    name    = "Windows PowerShell"
+                    commandline = "powershell.exe"
+                    hidden  = $false
+                    icon    = "ms-appx:///ProfileIcons/{61c54bbd-c2c6-5271-96e7-009a87ff44bf}.png"
+                },
+                [ordered]@{
+                    guid    = "{0caa0dad-35be-5f56-a8ff-afceeeaa6101}"
+                    name    = "Command Prompt"
+                    commandline = "cmd.exe"
+                    hidden  = $false
+                    icon    = "ms-appx:///ProfileIcons/{0caa0dad-35be-5f56-a8ff-afceeeaa6101}.png"
+                },
+                [ordered]@{
+                    guid    = "{574e775e-4f2a-5b96-ac1e-a2962a402336}"
+                    name    = "PowerShell"
+                    commandline = "pwsh.exe"
+                    hidden  = $false
+                    source  = "Windows.Terminal.PowershellCore"
+                    icon    = "ms-appx:///ProfileIcons/{574e775e-4f2a-5b96-ac1e-a2962a402336}.png"
+                }
+            )
         }
+        schemes = @(
+            [ordered]@{
+                name         = "Campbell"
+                foreground   = "#CCCCCC"
+                background   = "#0C0C0C"
+                selectionBackground = "#FFFFFF"
+                cursorColor  = "#FFFFFF"
+                black        = "#0C0C0C"; red    = "#C50F1F"; green  = "#13A10E"; yellow = "#C19C00"
+                blue         = "#0037DA"; purple = "#881798"; cyan   = "#3A96DD"; white  = "#CCCCCC"
+                brightBlack  = "#767676"; brightRed = "#E74856"; brightGreen = "#16C60C"; brightYellow = "#F9F1A5"
+                brightBlue   = "#3B78FF"; brightPurple = "#B4009E"; brightCyan = "#61D6D6"; brightWhite = "#F2F2F2"
+            },
+            [ordered]@{
+                name         = "One Half Dark"
+                foreground   = "#DCDFE4"
+                background   = "#282C34"
+                selectionBackground = "#FFFFFF"
+                cursorColor  = "#A3B3CC"
+                black        = "#282C34"; red    = "#E06C75"; green  = "#98C379"; yellow = "#E5C07B"
+                blue         = "#61AFEF"; purple = "#C678DD"; cyan   = "#56B6C2"; white  = "#DCDFE4"
+                brightBlack  = "#5A6374"; brightRed = "#E06C75"; brightGreen = "#98C379"; brightYellow = "#E5C07B"
+                brightBlue   = "#61AFEF"; brightPurple = "#C678DD"; brightCyan = "#56B6C2"; brightWhite = "#DCDFE4"
+            }
+        )
+        actions = @(
+            @{ command = @{ action = "copy"; singleLine = $false }; keys = "ctrl+c" },
+            @{ command = "paste";              keys = "ctrl+v" },
+            @{ command = "find";               keys = "ctrl+shift+f" },
+            @{ command = @{ action = "splitPane"; split = "auto"; splitMode = "duplicate" }; keys = "alt+shift+d" }
+        )
     }
+
+    $settingsJson = $defaultSettings | ConvertTo-Json -Depth 20
+
+    # Candidate sub-paths inside each user's AppData\Local for Windows Terminal
+    $terminalSubPaths = @(
+        "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
+        "Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
+        "Microsoft\Windows Terminal\settings.json"
+    )
 
     $updated = 0
+    $created = 0
+
+    # Include the current session's LOCALAPPDATA as well as all registry profiles
+    $allLocalAppDatas = @( [string]$env:LOCALAPPDATA )
+
+    foreach ($profileRoot in (Get-AllUserProfilePaths)) {
+        $lad = Join-Path $profileRoot "AppData\Local"
+        if ($allLocalAppDatas -notcontains $lad) { $allLocalAppDatas += $lad }
+    }
+
     foreach ($localAppData in $allLocalAppDatas) {
-        $candidates = @(
-            "$localAppData\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
-            "$localAppData\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
-            "$localAppData\Microsoft\Windows Terminal\settings.json"
-        )
+        foreach ($subPath in $terminalSubPaths) {
+            $settingsPath = Join-Path $localAppData $subPath
 
-        foreach ($settingsPath in ($candidates | Where-Object { Test-Path $_ })) {
-            try {
-                Write-Info "Updating Windows Terminal settings: $settingsPath"
-                $raw = Get-Content -Path $settingsPath -Raw -ErrorAction Stop
-                if ([string]::IsNullOrWhiteSpace($raw)) { throw "settings.json is empty" }
+            # Only write the preview/stable package paths if the package folder exists,
+            # OR if the file already exists there (e.g. manual install).
+            $packageDir = Split-Path $settingsPath -Parent
+            $packageRoot = Split-Path $packageDir -Parent   # …\LocalState -> …\Packages\Microsoft.WindowsTerminal_…
 
-                # Round-trip through hashtable to get fully mutable objects
-                $data = $raw | ConvertFrom-Json -ErrorAction Stop | ConvertTo-Json -Depth 60 | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            $packageFolderExists = Test-Path (Split-Path $packageRoot -Parent)   # …\Packages dir
 
-                if (-not $data.ContainsKey('profiles'))                     { $data['profiles'] = @{} }
-                if (-not $data['profiles'].ContainsKey('defaults'))         { $data['profiles']['defaults'] = @{} }
-                if (-not $data['profiles']['defaults'].ContainsKey('font')) { $data['profiles']['defaults']['font'] = @{} }
+            # For the non-package path (Microsoft\Windows Terminal) always attempt creation.
+            $isPackagePath = $subPath -like "Packages\*"
 
-                $data['profiles']['defaults']['font']['face'] = $FontFace
-                $data['profiles']['defaults']['font']['size'] = $FontSize
+            if ($isPackagePath -and -not $packageFolderExists -and -not (Test-Path $settingsPath)) {
+                # Package not installed for this user -- skip to avoid cluttering AppData
+                continue
+            }
 
-                $data | ConvertTo-Json -Depth 60 | Set-Content -Path $settingsPath -Encoding UTF8 -Force
+            if (Test-Path $settingsPath) {
+                # File exists -- update font in existing JSON, preserve everything else
+                try {
+                    $raw = Get-Content -Path $settingsPath -Raw -ErrorAction Stop
+                    if ([string]::IsNullOrWhiteSpace($raw)) { throw "empty file" }
 
-                Write-Ok "Terminal font set: '$FontFace' size=$FontSize -> $settingsPath"
-                $updated++
-            } catch {
-                Write-Warn "Failed updating '${settingsPath}': $($_.Exception.Message)"
+                    $data = $raw | ConvertFrom-Json -ErrorAction Stop |
+                            ConvertTo-Json -Depth 60 |
+                            ConvertFrom-Json -AsHashtable -ErrorAction Stop
+
+                    if (-not $data.ContainsKey('profiles'))                     { $data['profiles'] = @{} }
+                    if (-not $data['profiles'].ContainsKey('defaults'))         { $data['profiles']['defaults'] = @{} }
+                    if (-not $data['profiles']['defaults'].ContainsKey('font')) { $data['profiles']['defaults']['font'] = @{} }
+
+                    $data['profiles']['defaults']['font']['face'] = $FontFace
+                    $data['profiles']['defaults']['font']['size'] = $FontSize
+
+                    $data | ConvertTo-Json -Depth 60 | Set-Content -Path $settingsPath -Encoding UTF8 -Force
+                    Write-Ok "Updated existing settings.json: $settingsPath"
+                    $updated++
+                } catch {
+                    Write-Warn "Failed updating '${settingsPath}': $($_.Exception.Message)"
+                }
+            } else {
+                # File does not exist -- write full default settings.json from scratch
+                try {
+                    if (!(Test-Path $packageDir)) {
+                        New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+                    }
+                    $settingsJson | Set-Content -Path $settingsPath -Encoding UTF8 -Force
+                    Write-Ok "Created new settings.json: $settingsPath"
+                    $created++
+                } catch {
+                    Write-Warn "Failed creating '${settingsPath}': $($_.Exception.Message)"
+                }
             }
         }
     }
 
-    if ($updated -eq 0) {
-        Write-Warn "No Windows Terminal settings.json found across any user profile."
-        Write-Warn "Open Windows Terminal once as each user, then re-run the script."
-    } else {
-        Write-Ok "Updated $updated settings.json file(s)"
-    }
+    Write-Ok "Windows Terminal settings -- $updated updated, $created created"
 }
 
 # ----------------------------------------------------------------------------
@@ -388,7 +592,6 @@ foreach ($p in $chocoPkgs) {
     }
 }
 
-# Refresh PATH so choco-installed tools (python, etc.) are visible in this session
 Write-Info "Refreshing PATH after Chocolatey installs..."
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 Write-Ok "PATH refreshed"
@@ -407,12 +610,15 @@ $scoopPkgs = @(
 )
 foreach ($pkg in $scoopPkgs) { Invoke-ScoopInstallSafe -PackageId $pkg }
 
+Write-Host ""
+Write-Info "Writing btop.conf for all user accounts..."
+Write-BtopConfig -ColorTheme "Default" -UpdateMs 500
+
 # ============================================================================
 # SECTION 4: PYTHON PIP + GLANCES (pip)
 # ============================================================================
 Write-Host "`n[4/14] Installing Python pip and Glances via pip..." -ForegroundColor Yellow
 
-# Resolve python executable -- try py launcher, then python, then choco install paths
 $pyExe = $null
 foreach ($candidate in @("py", "python")) {
     $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
@@ -460,22 +666,15 @@ if ($pyExe) {
 # ============================================================================
 Write-Host "`n[5/14] Installing MSI packages from Nexus..." -ForegroundColor Yellow
 
-# -------------------------------------------------------------------
-# CONFIG -- update these to match your Nexus server and repo
-# -------------------------------------------------------------------
 $nexusBaseUrl   = "http://10.0.0.49:8081/repository/msi-packages"
-$nexusUser      = ""    # leave empty string "" for anonymous
-$nexusPassword  = ""    # leave empty string "" for anonymous
+$nexusUser      = ""
+$nexusPassword  = ""
 
-# Each entry uses keyword fragments - ANY match = already installed
 $nexusMsiMap = @(
     @{ File = "action1_agent(GurdipDevOps).msi";        Keywords = @("Action1") },
     @{ File = "DevolutionsAgent-x86_64-2026.1.0.0.msi"; Keywords = @("Devolutions", "RDM", "Devolutions Agent") }
 )
-# -------------------------------------------------------------------
 
-# Collect all installed display names from 32-bit and 64-bit hives
-# Collect installed display names — use explicit property access to avoid StrictMode errors
 $installedPrograms = @()
 $regHives = @(
     "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
@@ -520,46 +719,52 @@ if ($msiToInstall.Count -gt 0) {
 # ============================================================================
 # SECTION 6: ELITE POWERSHELL PROFILE (ALL USERS) + MODULES + TERMINAL FONT
 # ============================================================================
-Write-Host "`n[6/14] Configuring Elite PowerShell Profiles (All Users)..." -ForegroundColor Yellow
+Write-Host "`n[6/14] Configuring Elite PowerShell Profiles..." -ForegroundColor Yellow
 
 Trust-PSGallery
 Install-PSModuleSafe -Name "PSFzf"
 Install-PSModuleSafe -Name "Terminal-Icons"
 
+# ---- AllUsers profile for Windows PowerShell 5.x (system-wide, one file) ----
 $winPSAllUsersProfile = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\profile.ps1'
+Write-Info "Writing AllUsers Windows PowerShell profile..."
 Write-ElitePowerShellProfile -ProfilePath $winPSAllUsersProfile
 
-# Resolve pwsh ALL USERS profile path without spawning a child process
-# Child pwsh via iex pipe can fail with StrictMode -- use known paths instead
+# ---- AllUsers profile for PowerShell 7 (pwsh) ----
+# Resolve without spawning a child process -- avoid StrictMode failures
 $pwshAllUsersProfile = $null
 $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
-if ($pwshCmd -and $pwshCmd.Source) {
-    try {
-        # Try known PS7 all-users profile locations directly
-        $pwshDir = Split-Path $pwshCmd.Source -Parent
-        $candidates = @(
-            (Join-Path $pwshDir 'profile.ps1'),
-            'C:\Program Files\PowerShell\7\profile.ps1',
-            'C:\Program Files\PowerShell\7-preview\profile.ps1'
-        )
-        foreach ($c in $candidates) {
-            if ($c -and (Split-Path $c -Parent | Test-Path)) {
-                $pwshAllUsersProfile = $c
-                break
-            }
+if ($pwshCmd) {
+    $pwshDir = Split-Path $pwshCmd.Source -Parent
+    $pwsh7Candidates = @(
+        (Join-Path $pwshDir 'profile.ps1'),
+        'C:\Program Files\PowerShell\7\profile.ps1',
+        'C:\Program Files\PowerShell\7-preview\profile.ps1'
+    )
+    foreach ($c in $pwsh7Candidates) {
+        $parentDir = Split-Path $c -Parent
+        if ($parentDir -and (Test-Path $parentDir)) {
+            $pwshAllUsersProfile = $c
+            break
         }
-    } catch {
-        Write-Warn "Could not resolve pwsh profile path: $($_.Exception.Message)"
     }
 }
 
 if ($pwshAllUsersProfile) {
+    Write-Info "Writing AllUsers pwsh 7 profile..."
     Write-ElitePowerShellProfile -ProfilePath $pwshAllUsersProfile
 } else {
-    Write-Warn "pwsh not found or profile path unresolvable -- skipping pwsh ALL USERS profile."
+    Write-Warn "pwsh not found -- skipping pwsh AllUsers profile."
 }
 
-Write-Host "`n  Setting Windows Terminal font via external script..." -ForegroundColor Cyan
+# ---- Windows Terminal settings.json -- all user accounts ----
+Write-Host ""
+Write-Info "Writing Windows Terminal settings.json for all user accounts..."
+Update-WindowsTerminalSettings -FontFace "FiraCode Nerd Font" -FontSize 9
+
+# ---- External font script (kept for fallback / WT preview installs) ----
+Write-Host ""
+Write-Info "Running supplemental font script..."
 try {
     $fontScript = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/GurdipSCode/devops-scripts-softwareconfigs/refs/heads/main/operatingsystems/windowsserver/set-windows-terminal-font.ps1" -UseBasicParsing
     Invoke-Expression $fontScript
@@ -568,6 +773,7 @@ try {
     Write-Warn "Font script failed: $($_.Exception.Message)"
 }
 
+# ============================================================================
 # SECTION 7: PERFORMANCE OPTIMIZATIONS
 # ============================================================================
 Write-Host "`n[7/14] Applying Performance Optimizations..." -ForegroundColor Yellow
