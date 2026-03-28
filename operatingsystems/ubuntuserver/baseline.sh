@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -357,9 +356,42 @@ fi
 # ----------------------------
 # Starship
 # ----------------------------
-if [[ "$INSTALL_STARSHIP" == "true" ]] && ! command -v starship >/dev/null 2>&1; then
-  log "Installing Starship"
-  curl -fsSL https://starship.rs/install.sh | sh -s -- -y || warn "Starship install failed"
+# Install Starship to /usr/local/bin so it is available to all users,
+# including root and any future accounts, without requiring Homebrew in PATH.
+if [[ "$INSTALL_STARSHIP" == "true" ]]; then
+  if command -v starship >/dev/null 2>&1; then
+    log "Starship already installed: $(starship --version)"
+  else
+    log "Installing Starship prompt"
+    if curl -fsSL https://starship.rs/install.sh | sh -s -- --yes --bin-dir /usr/local/bin; then
+      ok "Starship installed to /usr/local/bin/starship"
+    else
+      warn "Starship install failed — prompt will not be configured"
+      INSTALL_STARSHIP="false"
+    fi
+  fi
+
+  # Write a system-wide profile.d snippet so Starship initialises for every
+  # interactive bash session regardless of how the user's PATH is set up.
+  # The per-user .bashrc block (added by configure_shell_for_user) takes
+  # precedence when present; this acts as a reliable fallback.
+  if [[ "$INSTALL_STARSHIP" == "true" ]]; then
+    log "Writing /etc/profile.d/starship.sh for system-wide availability"
+    cat > /etc/profile.d/starship.sh <<'EOF'
+# Starship prompt — system-wide init (Ubuntu DevOps Bootstrap)
+# Only activate for interactive bash sessions; skip for scripts/cron.
+if [ -n "$BASH_VERSION" ] && [[ "$-" == *i* ]]; then
+  STARSHIP_BIN="${HOME}/.local/bin/starship"
+  [ -x "$STARSHIP_BIN" ] || STARSHIP_BIN="/usr/local/bin/starship"
+  [ -x "$STARSHIP_BIN" ] || STARSHIP_BIN="$(command -v starship 2>/dev/null || true)"
+  if [ -n "$STARSHIP_BIN" ] && [ -x "$STARSHIP_BIN" ]; then
+    eval "$("$STARSHIP_BIN" init bash)"
+  fi
+  unset STARSHIP_BIN
+fi
+EOF
+    chmod 644 /etc/profile.d/starship.sh
+  fi
 fi
 
 # ----------------------------
@@ -393,6 +425,61 @@ fi
 # ----------------------------
 # Shell config
 # ----------------------------
+
+# Canonical Starship config block — written once per user by configure_shell_for_user.
+# Kept in a variable so it is easy to update in one place.
+STARSHIP_TOML_CONTENT='add_newline = false
+
+[character]
+success_symbol = "[➜](green)"
+error_symbol = "[➜](red)"
+
+[hostname]
+# Show hostname always (not just over SSH) so the prompt matches the
+# terminal title visible in your screenshot.
+ssh_only = false
+format = "[$hostname](bold yellow):"
+style = "bold yellow"
+
+[username]
+show_always = true
+format = "[$user](bold blue)@"
+style_user = "bold blue"
+
+[directory]
+truncation_length = 3
+truncate_to_repo = true
+style = "bold cyan"
+
+[git_branch]
+symbol = " "
+style = "bold purple"
+
+[git_status]
+style = "bold red"
+
+[cmd_duration]
+min_time = 500
+format = "took [$duration](bold yellow) "
+'
+
+write_starship_config() {
+  local user_name="$1"
+  local home_dir="$2"
+  local config_dir="${home_dir}/.config"
+  local config_file="${config_dir}/starship.toml"
+
+  mkdir -p "$config_dir"
+
+  if [[ ! -f "$config_file" ]]; then
+    printf '%s' "$STARSHIP_TOML_CONTENT" > "$config_file"
+    chown -R "$user_name":"$user_name" "$config_dir"
+    ok "Starship config written → $config_file"
+  else
+    log "Starship config already exists for $user_name — not overwritten"
+  fi
+}
+
 configure_shell_for_user() {
   local user_name="$1"
   local home_dir
@@ -425,39 +512,17 @@ configure_shell_for_user() {
     append_if_missing "$bashrc" "$line"
   done < <(brew_shellenv_line)
 
+  # Starship: add per-user .bashrc init line (more explicit than profile.d,
+  # and allows the user to override STARSHIP_CONFIG if they want).
   if [[ "$INSTALL_STARSHIP" == "true" ]]; then
-    append_if_missing "$bashrc" 'command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"'
-  fi
+    append_if_missing "$bashrc" ""
+    append_if_missing "$bashrc" "# Starship prompt"
+    # Prefer /usr/local/bin install; fall back to PATH lookup.
+    append_if_missing "$bashrc" 'export STARSHIP_CONFIG="${HOME}/.config/starship.toml"'
+    append_if_missing "$bashrc" 'STARSHIP_BIN="/usr/local/bin/starship"; [ -x "$STARSHIP_BIN" ] || STARSHIP_BIN="$(command -v starship 2>/dev/null)"; [ -n "$STARSHIP_BIN" ] && eval "$("$STARSHIP_BIN" init bash)"; unset STARSHIP_BIN'
 
-  mkdir -p "${home_dir}/.config"
-  if [[ ! -f "${home_dir}/.config/starship.toml" ]]; then
-    cat > "${home_dir}/.config/starship.toml" <<'EOF'
-add_newline = false
-
-[character]
-success_symbol = "[➜](green)"
-error_symbol = "[➜](red)"
-
-[hostname]
-ssh_only = true
-format = "[$hostname](bold yellow) "
-
-[username]
-show_always = true
-format = "[$user](bold blue)@"
-
-[directory]
-truncation_length = 3
-truncate_to_repo = true
-
-[git_branch]
-symbol = " "
-
-[cmd_duration]
-min_time = 500
-format = "took [$duration](bold yellow) "
-EOF
-    chown -R "$user_name":"$user_name" "${home_dir}/.config"
+    # Write the per-user starship.toml
+    write_starship_config "$user_name" "$home_dir"
   fi
 }
 
@@ -540,8 +605,10 @@ Examples:
        PDQ_AGENT_URL="https://example/pdq.sh" \
        bash ubuntu-bootstrap.sh
 
+  sudo INSTALL_STARSHIP=false bash ubuntu-bootstrap.sh   # skip Starship
+
 Installed shell UX:
-  - starship
+  - starship  (→ /usr/local/bin, system-wide via /etc/profile.d/starship.sh)
   - zoxide
   - fzf
   - lla
@@ -561,4 +628,6 @@ Installed admin tools:
 Important:
   - Make sure your SSH public key is installed before running this remotely.
   - CIS/USG needs Ubuntu Pro support on the target host.
+  - Starship config per user: ~/.config/starship.toml (not overwritten if exists)
+  - System-wide Starship fallback: /etc/profile.d/starship.sh
 EOF
