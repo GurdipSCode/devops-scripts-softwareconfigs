@@ -413,10 +413,8 @@ brew install \
   hyperfine \
   gping \
   xh \
-  chezmoi \
-  tealdeer \
-  cnquery \
-  cnspec || true
+  chezmoi 
+  tealdeer \ || true
 
 tldr -u || true
 '
